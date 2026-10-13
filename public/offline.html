@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Offline | POS JadikanWeb</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        font-family: system-ui, sans-serif;
+        background: #f5f5f5;
+        color: #0a0a0a;
+        padding: 1rem;
+      }
+      main {
+        max-width: 24rem;
+        text-align: center;
+      }
+      h1 {
+        font-size: 1.25rem;
+        margin: 0 0 0.5rem;
+      }
+      p {
+        margin: 0 0 1.25rem;
+        color: #525252;
+        font-size: 0.9rem;
+      }
+      a,
+      button {
+        display: inline-block;
+        margin: 0.25rem;
+        padding: 0.55rem 1rem;
+        border-radius: 0.5rem;
+        border: 1px solid #d4d4d4;
+        background: #fff;
+        color: inherit;
+        font: inherit;
+        text-decoration: none;
+        cursor: pointer;
+      }
+      a.primary {
+        background: #0a0a0a;
+        color: #fff;
+        border-color: #0a0a0a;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Anda sedang offline</h1>
+      <p>
+        Halaman ini belum tersedia tanpa internet. Kasir tetap bisa dibuka jika
+        sudah pernah dibuka sebelumnya saat online.
+      </p>
+      <a class="primary" href="/kasir">Buka kasir</a>
+      <button type="button" onclick="location.reload()">Coba lagi</button>
+    </main>
+  </body>
+</html>

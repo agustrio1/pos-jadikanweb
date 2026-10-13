@@ -1,7 +1,18 @@
 .DS_Store
 .env
+.env.*
+!.env.example
 /node_modules/
+*.log
 
 # React Router
 /.react-router/
 /build/
+
+# Vercel
+.vercel/
+
+# Backup database (berisi data produksi, jangan di-commit)
+*.dump
+*.dump.*
+pos-backup-*
