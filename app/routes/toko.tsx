@@ -32,7 +32,7 @@ export async function action({ request }: Route.ActionArgs) {
   const { user } = await requireAdminStore(request);
   const form = await request.formData();
   const intent = String(form.get("intent") ?? "");
-  const actor = { businessId: user.businessId };
+  const actor = { businessId: user.businessId, userId: user.id };
 
   const storeIdField =
     intent === "update" ? String(form.get("storeId") ?? "") : "";

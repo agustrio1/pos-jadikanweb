@@ -3,6 +3,7 @@ import type { Db } from "../db/client";
 import { sessions, stores, users } from "../db/schema";
 import { hashPassword } from "../auth/password";
 import { UserError } from "../errors";
+import { writeAudit } from "./audit";
 
 type Actor = { businessId: string; userId: string };
 
@@ -80,6 +81,14 @@ export async function createUser(
       maxDiscountPct: input.role === "admin" ? 100 : input.maxDiscountPct,
     })
     .returning({ id: users.id });
+  await writeAudit(db, {
+    businessId: actor.businessId,
+    actorId: actor.userId,
+    action: "user_create",
+    entityType: "user",
+    entityId: row.id,
+    detail: `Buat pengguna ${input.username} (role ${input.role}).`,
+  });
   return row.id;
 }
 
@@ -113,6 +122,15 @@ export async function updateUser(
       maxDiscountPct: input.role === "admin" ? 100 : input.maxDiscountPct,
     })
     .where(and(eq(users.id, input.userId), eq(users.businessId, actor.businessId)));
+
+  await writeAudit(db, {
+    businessId: actor.businessId,
+    actorId: actor.userId,
+    action: "user_update",
+    entityType: "user",
+    entityId: input.userId,
+    detail: `Perbarui pengguna ${target.username} (role ${input.role}).`,
+  });
 }
 
 // Nonaktifkan/aktifkan kembali. Menonaktifkan menghapus sesi aktif user itu
@@ -155,6 +173,15 @@ export async function setActiveUser(
   if (!input.active) {
     await db.delete(sessions).where(eq(sessions.userId, input.userId));
   }
+
+  await writeAudit(db, {
+    businessId: actor.businessId,
+    actorId: actor.userId,
+    action: input.active ? "user_update" : "user_disable",
+    entityType: "user",
+    entityId: input.userId,
+    detail: `${input.active ? "Aktifkan kembali" : "Nonaktifkan"} pengguna ${target.username}.`,
+  });
 }
 
 // Reset password oleh admin = putus sesi lama user tersebut. Sengaja: token
@@ -173,4 +200,13 @@ export async function resetUserPassword(
     .set({ passwordHash })
     .where(and(eq(users.id, input.userId), eq(users.businessId, actor.businessId)));
   await db.delete(sessions).where(eq(sessions.userId, input.userId));
+
+  await writeAudit(db, {
+    businessId: actor.businessId,
+    actorId: actor.userId,
+    action: "password_reset",
+    entityType: "user",
+    entityId: input.userId,
+    detail: `Reset password pengguna ${target.username}.`,
+  });
 }

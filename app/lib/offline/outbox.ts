@@ -1,5 +1,5 @@
 import { getDb } from "./db";
-import type { OutboxItem, OutboxSale } from "./types";
+import type { OutboxItem, OutboxSale, SalePaymentLine } from "./types";
 
 const PRUNE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -15,6 +15,10 @@ export type NewOfflineSale = {
   subtotal: number;
   total: number;
   cashReceived: number;
+  // Rincian metode bila campuran/non-tunai; bila ada, `change`override nilai
+  // kembalian tunai (tidak lagi cashReceived - total).
+  payments?: SalePaymentLine[];
+  change?: number;
 };
 
 // Satu transaksi IndexedDB: nomor sementara dan baris outbox tersimpan bersama
@@ -53,7 +57,8 @@ export async function saveOfflineSale(
       subtotal: input.subtotal,
       total: input.total,
       cashReceived: input.cashReceived,
-      change: input.cashReceived - input.total,
+      change: input.change ?? input.cashReceived - input.total,
+      payments: input.payments,
       status: "pending_sync",
       attempts: 0,
       nextRetryAt: null,

@@ -172,6 +172,21 @@ export const stockAdjustSchema = z.object({
   reason: z.string().trim().min(3).max(200),
 });
 
+// Satu baris pembayaran. Dipakai untuk pembayaran campuran / non-tunai.
+// amount = bagian tagihan yang dilunasi metode ini. Untuk tunai, tendered =
+// uang yang diterima (boleh > amount, selisihnya kembalian). Nilai uang
+// selalu dihitung ulang/divalidasi server.
+export const paymentLineInputSchema = z.object({
+  method: z.enum(["cash", "qris", "debit", "credit"]),
+  amount: z.coerce.number().int().min(0).max(2_000_000_000),
+  tendered: z.coerce.number().int().min(0).max(2_000_000_000).optional(),
+  reference: z
+    .string()
+    .trim()
+    .max(64)
+    .optional(),
+});
+
 // Klien hanya mengirim produk, jumlah, diskon, dan uang diterima.
 // Harga dan total selalu dihitung ulang di server.
 export const saleInputSchema = z
@@ -191,6 +206,17 @@ export const saleInputSchema = z
       value: z.coerce.number().int().min(0).max(1_000_000_000),
     }),
     cashReceived: z.coerce.number().int().min(0).max(2_000_000_000),
+    // Hadir hanya saat ada metode non-tunai/pencacah. Jika kosong, server
+    // memakai jalur lama tunai dari cashReceived (kompatibel mundur).
+    payments: z.array(paymentLineInputSchema).max(8).optional(),
+    // Pelanggan (opsional) untuk loyalti/piutang. String kosong/null => tanpa
+    // pelanggan. Harga & total selalu dihitung ulang di server.
+    customerId: z
+      .union([z.uuid(), z.null(), z.literal("")])
+      .transform((v) => (v && v !== "" ? v : null))
+      .optional(),
+    // Poin yang ditukar jadi diskon. Dinormalisasi & divalidasi server.
+    redeemPoints: z.coerce.number().int().min(0).optional(),
   })
   .superRefine((value, ctx) => {
     const seen = new Set<string>();
@@ -214,6 +240,74 @@ export const saleInputSchema = z
   });
 
 export type SaleInput = z.infer<typeof saleInputSchema>;
+
+// Pembuatan/perubahan pelanggan. Nomor HP opsional (unik per bisnis di server).
+export const customerInputSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  phone: emptyToNull(32),
+  tier: emptyToNull(40),
+});
+
+export type CustomerInput = z.infer<typeof customerInputSchema>;
+
+// Cicilan pembayaran piutang (metode nyata, bukan kredit).
+export const debtPaymentSchema = z.object({
+  debtId: z.uuid(),
+  amount: z.coerce.number().int().min(1).max(2_000_000_000),
+  method: z.enum(["cash", "qris", "debit"]),
+  reference: z
+    .string()
+    .trim()
+    .max(64)
+    .optional(),
+});
+
+export type DebtPaymentInput = z.infer<typeof debtPaymentSchema>;
+
+// Pemasok (Fase 7). Nama wajib; telepon/alamat opsional.
+export const supplierInputSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  phone: emptyToNull(32),
+  address: emptyToNull(200),
+});
+
+export type SupplierInput = z.infer<typeof supplierInputSchema>;
+
+// Satu baris item purchase order. unit_cost = harga beli per satuan.
+export const poLineSchema = z.object({
+  variantId: z.uuid(),
+  qty: z.coerce.number().int().min(1).max(100_000),
+  unitCost: z.coerce.number().int().min(0).max(1_000_000_000),
+});
+
+// Pembuatan PO (Fase 7). items dikirim sebagai JSON dari form; total selalu
+// dihitung ulang di server. Varian tidak boleh ganda dalam satu PO.
+export const purchaseOrderInputSchema = z.object({
+  supplierId: z.uuid(),
+  note: emptyToNull(200),
+  items: z.array(poLineSchema).min(1).max(200),
+}).superRefine((value, ctx) => {
+  const seen = new Set<string>();
+  value.items.forEach((line, index) => {
+    if (seen.has(line.variantId)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Varian ganda dalam satu PO",
+        path: ["items", index, "variantId"],
+      });
+    }
+    seen.add(line.variantId);
+  });
+});
+
+export type PurchaseOrderInput = z.infer<typeof purchaseOrderInputSchema>;
+
+// Isi satu baris opname (Fase 7). counted_qty = hasil hitung fisik.
+export const stockCountItemSchema = z.object({
+  countId: z.uuid(),
+  variantId: z.uuid(),
+  countedQty: z.coerce.number().int().min(0).max(1_000_000),
+});
 
 export function parseJson(value: FormDataEntryValue | null): unknown {
   if (typeof value !== "string") return null;

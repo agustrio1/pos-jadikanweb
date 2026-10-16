@@ -8,6 +8,8 @@ import {
   users,
 } from "../db/schema";
 import { UserError } from "../errors";
+import { variantLabel } from "~/lib/format";
+import { writeAudit } from "./audit";
 
 type Actor = { businessId: string; storeId: string; userId: string };
 
@@ -108,6 +110,30 @@ export async function stockAdjust(
       type: "adjust",
       reason: input.reason,
       createdBy: actor.userId,
+    });
+
+    const [v] = await tx
+      .select({
+        name: products.name,
+        size: productVariants.size,
+        color: productVariants.color,
+      })
+      .from(productVariants)
+      .innerJoin(products, eq(products.id, productVariants.productId))
+      .where(eq(productVariants.id, input.variantId))
+      .limit(1);
+    const label = v
+      ? `${v.name}${variantLabel(v.size, v.color) ? ` (${variantLabel(v.size, v.color)})` : ""}`
+      : input.variantId;
+
+    await writeAudit(tx, {
+      businessId: actor.businessId,
+      storeId: actor.storeId,
+      actorId: actor.userId,
+      action: "stock_adjust",
+      entityType: "variant",
+      entityId: input.variantId,
+      detail: `Koreksi stok ${label}: ${current.qty} → ${input.qty} (${delta > 0 ? "+" : ""}${delta}). Alasan: ${input.reason}`,
     });
   });
 }

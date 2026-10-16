@@ -59,9 +59,9 @@ function buildSalesCsv(
   lines.push("");
 
   push("Per hari");
-  push("Tanggal", "Transaksi", "Omzet", "Diskon", "Laba kotor", "Batal");
+  push("Tanggal", "Transaksi", "Omzet", "Diskon", "PPN", "Laba kotor", "Batal");
   for (const day of report.days) {
-    push(day.day, day.count, day.revenue, day.discount, day.profit, day.voidCount);
+    push(day.day, day.count, day.revenue, day.discount, day.tax, day.profit, day.voidCount);
   }
   lines.push("");
 
@@ -70,6 +70,7 @@ function buildSalesCsv(
     report.totals.count,
     report.totals.revenue,
     report.totals.discount,
+    report.totals.tax,
     report.totals.profit,
     report.totals.voidCount,
   );

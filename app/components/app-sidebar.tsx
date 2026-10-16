@@ -1,16 +1,5 @@
 import { HugeiconsIcon } from "@hugeicons/react";
-import {
-  Clock01Icon,
-  Home01Icon,
-  Invoice01Icon,
-  Layers01Icon,
-  Logout01Icon,
-  PackageIcon,
-  ShoppingCart01Icon,
-  StoreAdd01Icon,
-  Tag01Icon,
-  UserGroupIcon,
-} from "@hugeicons/core-free-icons";
+import { Logout01Icon } from "@hugeicons/core-free-icons";
 import { Link, useFetcher, useLocation } from "react-router";
 import {
   DropdownMenu,
@@ -38,63 +27,7 @@ import { clearOfflineData } from "~/lib/offline/clear";
 import { countUnsent } from "~/lib/offline/logout-guard";
 import { flushOutbox } from "~/lib/offline/sync-engine";
 import { useOnline } from "~/lib/offline/use-online";
-
-type NavItem = {
-  to: string;
-  label: string;
-  icon: typeof Home01Icon;
-  exact?: boolean;
-  // Hanya halaman ini yang berfungsi tanpa internet.
-  offlineReady?: boolean;
-};
-
-const groups: { label: string; adminOnly?: boolean; items: NavItem[] }[] = [
-  {
-    label: "Umum",
-    items: [{ to: "/", label: "Beranda", icon: Home01Icon, exact: true }],
-  },
-  {
-    label: "Penjualan",
-    items: [
-      {
-        to: "/kasir",
-        label: "Kasir",
-        icon: ShoppingCart01Icon,
-        offlineReady: true,
-      },
-      { to: "/penjualan", label: "Riwayat penjualan", icon: Invoice01Icon },
-    ],
-  },
-  {
-    label: "Laporan",
-    adminOnly: true,
-    items: [{ to: "/laporan", label: "Laporan", icon: Invoice01Icon }],
-  },
-  {
-    label: "Katalog",
-    adminOnly: true,
-    items: [
-      { to: "/produk", label: "Produk", icon: PackageIcon },
-      { to: "/kategori", label: "Kategori", icon: Tag01Icon },
-    ],
-  },
-  {
-    label: "Persediaan",
-    adminOnly: true,
-    items: [
-      { to: "/stok", label: "Stok", icon: Layers01Icon, exact: true },
-      { to: "/stok/riwayat", label: "Riwayat stok", icon: Clock01Icon },
-    ],
-  },
-  {
-    label: "Administrasi",
-    adminOnly: true,
-    items: [
-      { to: "/pengguna", label: "Pengguna", icon: UserGroupIcon },
-      { to: "/toko", label: "Toko", icon: StoreAdd01Icon },
-    ],
-  },
-];
+import { navGroups as groups, type NavItem } from "~/lib/nav";
 
 export function AppSidebar({
   user,

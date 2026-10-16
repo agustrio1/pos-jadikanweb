@@ -4,6 +4,7 @@ import type { Route } from "./+types/kasir";
 import { requireStoreUser } from "~/.server/auth/store-user";
 import { withDb } from "~/.server/db/client";
 import { actionErrorFrom } from "~/.server/errors";
+import { listCustomerOptions } from "~/.server/services/customers";
 import { createSale } from "~/.server/services/sales";
 import { OfflineReceipt } from "~/components/offline-receipt";
 import { OutboxPanel } from "~/components/outbox-panel";
@@ -28,6 +29,13 @@ import {
   SelectValue,
 } from "~/components/ui/select";
 import { formatDateTime, formatRupiah } from "~/lib/format";
+import {
+  REDEEM_MIN_POINTS,
+  REDEEM_RUPIAH_PER_POINT,
+  normalizeRedeemPoints,
+  pointsEarned,
+  redeemDiscount,
+} from "~/lib/loyalty-rules";
 import { getMeta } from "~/lib/offline/db";
 import { isNetworkError } from "~/lib/offline/network";
 import { saveOfflineSale } from "~/lib/offline/outbox";
@@ -58,10 +66,16 @@ export async function loader({ request }: Route.LoaderArgs) {
     storeId,
     maxDiscountPct: user.maxDiscountPct,
   };
-  return { ok: true as const, user: cashier as SessionUser | null };
+  // Opsi pelanggan (loyalti/piutang) hanya tersedia saat online.
+  const customers = await withDb((db) =>
+    listCustomerOptions(db, { businessId: user.businessId }),
+  );
+  return { ok: true as const, user: cashier as SessionUser | null, customers };
 }
 
-export async function clientLoader({ serverLoader }: Route.ClientLoaderArgs) {
+export async function clientLoader({
+  serverLoader,
+}: Route.ClientLoaderArgs) {
   try {
     return await serverLoader();
   } catch (error) {
@@ -69,7 +83,11 @@ export async function clientLoader({ serverLoader }: Route.ClientLoaderArgs) {
     const stored = (await getMeta<SessionUser>("user").catch(
       () => undefined,
     )) as SessionUser | undefined;
-    return { ok: true as const, user: (stored ?? null) as SessionUser | null };
+    return {
+      ok: true as const,
+      user: (stored ?? null) as SessionUser | null,
+      customers: [] as Awaited<ReturnType<typeof listCustomerOptions>>,
+    };
   }
 }
 
@@ -149,11 +167,23 @@ export async function clientAction({
 type CartLine = { variantId: string; qty: number };
 type DiscountType = "none" | "percent" | "amount";
 
+type Method = "cash" | "qris" | "debit" | "credit";
+type PayLine = { id: string; method: Method; amount: string; reference: string };
+// Hanya metode non-tunai yang bisa ditambah baris; tunai tetap satu kolom.
+const NON_CASH_METHODS: Method[] = ["qris", "debit", "credit"];
+const PAYMENT_LABEL: Record<Method, string> = {
+  cash: "Tunai",
+  qris: "QRIS",
+  debit: "Debit",
+  credit: "Kredit",
+};
+
 const QUICK_CASH = [20_000, 50_000, 100_000];
 const MAX_CARDS = 24;
 
 export default function Kasir({ actionData, loaderData }: Route.ComponentProps) {
   const cashier = loaderData.user;
+  const customers = loaderData.customers ?? [];
   const catalog = useCatalog();
   const { items, ready, online, syncedAt, truncated, syncing } = catalog;
   const { rows: outboxRows } = useOutbox();
@@ -168,6 +198,9 @@ export default function Kasir({ actionData, loaderData }: Route.ComponentProps) 
   const [discountType, setDiscountType] = useState<DiscountType>("none");
   const [discountValue, setDiscountValue] = useState("");
   const [cash, setCash] = useState("");
+  const [payLines, setPayLines] = useState<PayLine[]>([]);
+  const [customerId, setCustomerId] = useState("");
+  const [redeemInput, setRedeemInput] = useState("");
   const [clientId, setClientId] = useState("");
 
   const [savedSale, setSavedSale] = useState<OutboxSale | null>(null);
@@ -180,7 +213,7 @@ export default function Kasir({ actionData, loaderData }: Route.ComponentProps) 
   // transaksi yang identik (idempotensi) pada jalur online.
   useEffect(() => {
     setClientId(crypto.randomUUID());
-  }, [cart, discountType, discountValue, cash]);
+  }, [cart, discountType, discountValue, cash, payLines, customerId, redeemInput]);
 
   const byId = useMemo(
     () => new Map(items.map((item) => [item.variantId, item])),
@@ -240,9 +273,59 @@ export default function Kasir({ actionData, loaderData }: Route.ComponentProps) 
       : discountType === "amount"
         ? Math.min(discountNum, subtotal)
         : 0;
-  const total = subtotal - discount;
+  const totalBase = subtotal - discount;
+  // Loyalti: pelanggan terpilih & penukaran poin (server memvalidasi ulang).
+  const selectedCustomer =
+    customers.find((c) => c.id === customerId) ?? null;
+  const availablePoints = selectedCustomer?.points ?? 0;
+  const requestedPoints = Number(redeemInput) || 0;
+  const pointsCap = Math.floor(totalBase / REDEEM_RUPIAH_PER_POINT);
+  const pointsUsed =
+    selectedCustomer && requestedPoints > 0
+      ? Math.min(
+          normalizeRedeemPoints(requestedPoints, availablePoints),
+          normalizeRedeemPoints(pointsCap, availablePoints),
+        )
+      : 0;
+  const loyaltyDiscount = redeemDiscount(pointsUsed);
+  const total = totalBase - loyaltyDiscount;
+  const earnedPoints = pointsEarned(total);
   const cashNum = Number(cash) || 0;
-  const change = cashNum - total;
+  // Bagian tagihan yang dilunasi metode non-tunai; sisanya ditanggung tunai.
+  const nonCashSum = payLines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+  const nonCashOver = nonCashSum > total;
+  const nonCashValid = payLines.every((l) => (Number(l.amount) || 0) > 0);
+  const cashDue = Math.max(total - nonCashSum, 0);
+  const change = cashNum - cashDue;
+  // Kredit memerlukan pelanggan (untuk membentuk piutang).
+  const creditSelected = payLines.some(
+    (l) => l.method === "credit" && (Number(l.amount) || 0) > 0,
+  );
+  const creditNeedsCustomer = creditSelected && !customerId;
+
+  // Rincian metode pembayaran: hanya dibangun bila ada baris non-tunai.
+  // Tanpa non-tunai, payload memakai jalur lama (cashReceived) supaya identik
+  // dengan sebelumnya.
+  const buildPayments = () => {
+    if (payLines.length === 0) return undefined;
+    type Row = {
+      method: Method;
+      amount: number;
+      tendered?: number;
+      reference?: string;
+    };
+    const rows: Row[] = payLines
+      .map((l) => ({
+        method: l.method,
+        amount: Number(l.amount) || 0,
+        reference: l.reference.trim() || undefined,
+      }))
+      .filter((r) => r.amount > 0);
+    if (cashDue > 0) {
+      rows.push({ method: "cash", amount: cashDue, tendered: cashNum });
+    }
+    return rows;
+  };
 
   // Batas diskon dipakai di jalur offline; jalur online diperiksa server.
   const discountLimitPct =
@@ -250,12 +333,22 @@ export default function Kasir({ actionData, loaderData }: Route.ComponentProps) 
   const overDiscountLimit = discount * 100 > subtotal * discountLimitPct;
 
   const canSubmit =
-    online && lines.length > 0 && cashNum >= total && clientId !== "" && !busy;
+    online &&
+    lines.length > 0 &&
+    clientId !== "" &&
+    !busy &&
+    !nonCashOver &&
+    nonCashValid &&
+    !creditNeedsCustomer &&
+    cashNum >= cashDue;
   const canSaveOffline =
     !online &&
     !saving &&
     lines.length > 0 &&
-    cashNum >= total &&
+    !nonCashOver &&
+    nonCashValid &&
+    !creditNeedsCustomer &&
+    cashNum >= cashDue &&
     !overDiscountLimit;
 
   const add = (variantId: string) => {
@@ -330,12 +423,17 @@ export default function Kasir({ actionData, loaderData }: Route.ComponentProps) 
         subtotal,
         total,
         cashReceived: cashNum,
+        payments: buildPayments(),
+        change,
       });
       setSavedSale(sale);
       setCart([]);
       setDiscountType("none");
       setDiscountValue("");
       setCash("");
+      setPayLines([]);
+      setCustomerId("");
+      setRedeemInput("");
       if (reuseClientId) {
         setFallbackNotice(
           "Koneksi ke server terputus saat memproses pembayaran. Transaksi disimpan di perangkat dan dikirim otomatis. Jika server ternyata sudah mencatatnya, sistem mengenalinya dan tidak mencatat ganda.",
@@ -388,6 +486,9 @@ export default function Kasir({ actionData, loaderData }: Route.ComponentProps) 
       value: discountType === "none" ? 0 : discountNum,
     },
     cashReceived: cashNum,
+    payments: buildPayments(),
+    customerId: customerId || null,
+    redeemPoints: pointsUsed,
   });
 
   return (
@@ -686,6 +787,60 @@ export default function Kasir({ actionData, loaderData }: Route.ComponentProps) 
                   </ul>
                 ) : null}
 
+                {/* Pelanggan & loyalti (hanya online). */}
+                {online ? (
+                  <div className="space-y-2 border-b pb-3">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="customer">Pelanggan (opsional)</Label>
+                      <select
+                        id="customer"
+                        value={customerId}
+                        onChange={(e) => {
+                          setCustomerId(e.target.value);
+                          setRedeemInput("");
+                        }}
+                        className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                      >
+                        <option value="">Tanpa pelanggan</option>
+                        {customers.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                            {c.phone ? ` · ${c.phone}` : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {selectedCustomer ? (
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                          <span>Poin tersedia: {availablePoints}</span>
+                          <span>
+                            {pointsUsed > 0
+                              ? `Pakai ${pointsUsed} → -${formatRupiah(loyaltyDiscount)}`
+                              : `Tukar per kelipatan ${REDEEM_MIN_POINTS} poin`}
+                          </span>
+                        </div>
+                        <Input
+                          type="number"
+                          inputMode="numeric"
+                          min={0}
+                          step={REDEEM_MIN_POINTS}
+                          value={redeemInput}
+                          onChange={(e) => setRedeemInput(e.target.value)}
+                          placeholder="Poin ditukar"
+                          aria-label="Poin ditukar"
+                        />
+                        {requestedPoints > 0 && pointsUsed === 0 ? (
+                          <p className="text-xs text-destructive">
+                            Poin tidak cukup atau bukan kelipatan{" "}
+                            {REDEEM_MIN_POINTS}.
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 <div className="space-y-1.5">
                   <Label>Diskon</Label>
                   <div className="flex gap-2">
@@ -729,14 +884,137 @@ export default function Kasir({ actionData, loaderData }: Route.ComponentProps) 
                     <span className="text-muted-foreground">Diskon</span>
                     <span>- {formatRupiah(discount)}</span>
                   </div>
+                  {loyaltyDiscount > 0 ? (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">
+                        Diskon poin ({pointsUsed})
+                      </span>
+                      <span>- {formatRupiah(loyaltyDiscount)}</span>
+                    </div>
+                  ) : null}
                   <div className="flex justify-between text-base font-semibold">
                     <span>Total</span>
                     <span>{formatRupiah(total)}</span>
                   </div>
+                  {customerId && earnedPoints > 0 ? (
+                    <p className="text-xs text-muted-foreground">
+                      Poin diperoleh transaksi ini: +{earnedPoints}
+                    </p>
+                  ) : null}
+                </div>
+
+                {/* Metode non-tunai (opsional): beberapa baris bisa ditambah.
+                    Sisanya otomatis ditanggung tunai. */}
+                <div className="space-y-2 border-t pt-3">
+                  <div className="flex items-center justify-between">
+                    <Label>Metode non-tunai (opsional)</Label>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={payLines.length >= NON_CASH_METHODS.length || total <= 0}
+                      onClick={() =>
+                        setPayLines((cur) => [
+                          ...cur,
+                          {
+                            id: crypto.randomUUID(),
+                            method: "qris",
+                            amount: "",
+                            reference: "",
+                          },
+                        ])
+                      }
+                    >
+                      + Metode
+                    </Button>
+                  </div>
+                  {payLines.map((line) => (
+                    <div
+                      key={line.id}
+                      className="flex flex-wrap items-center gap-2"
+                    >
+                      <select
+                        value={line.method}
+                        onChange={(e) =>
+                          setPayLines((cur) =>
+                            cur.map((l) =>
+                              l.id === line.id
+                                ? { ...l, method: e.target.value as Method }
+                                : l,
+                            ),
+                          )
+                        }
+                        className="h-9 rounded-md border border-input bg-transparent px-2 text-sm"
+                        aria-label="Metode non-tunai"
+                      >
+                        {NON_CASH_METHODS.map((m) => (
+                          <option key={m} value={m}>
+                            {PAYMENT_LABEL[m]}
+                          </option>
+                        ))}
+                      </select>
+                      <Input
+                        type="number"
+                        inputMode="numeric"
+                        min={0}
+                        placeholder="Nominal"
+                        value={line.amount}
+                        onChange={(e) =>
+                          setPayLines((cur) =>
+                            cur.map((l) =>
+                              l.id === line.id
+                                ? { ...l, amount: e.target.value }
+                                : l,
+                            ),
+                          )
+                        }
+                        className="h-9 w-32"
+                        aria-label="Nominal non-tunai"
+                      />
+                      <Input
+                        placeholder="No. referensi"
+                        value={line.reference}
+                        onChange={(e) =>
+                          setPayLines((cur) =>
+                            cur.map((l) =>
+                              l.id === line.id
+                                ? { ...l, reference: e.target.value }
+                                : l,
+                            ),
+                          )
+                        }
+                        className="h-9 min-w-0 flex-1"
+                        aria-label="Nomor referensi"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="text-destructive"
+                        onClick={() =>
+                          setPayLines((cur) =>
+                            cur.filter((l) => l.id !== line.id),
+                          )
+                        }
+                      >
+                        Hapus
+                      </Button>
+                    </div>
+                  ))}
+                  {nonCashOver ? (
+                    <p className="text-sm text-destructive">
+                      Total non-tunai melebihi tagihan.
+                    </p>
+                  ) : null}
+                  {creditNeedsCustomer ? (
+                    <p className="text-sm text-destructive">
+                      Pembayaran kredit memerlukan pemilihan pelanggan.
+                    </p>
+                  ) : null}
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label htmlFor="cash">Uang diterima</Label>
+                  <Label htmlFor="cash">Uang tunai diterima</Label>
                   <Input
                     id="cash"
                     type="number"
@@ -750,8 +1028,8 @@ export default function Kasir({ actionData, loaderData }: Route.ComponentProps) 
                       type="button"
                       variant="outline"
                       size="sm"
-                      disabled={total <= 0}
-                      onClick={() => setCash(String(total))}
+                      disabled={cashDue <= 0}
+                      onClick={() => setCash(String(cashDue))}
                     >
                       Uang pas
                     </Button>
@@ -767,19 +1045,25 @@ export default function Kasir({ actionData, loaderData }: Route.ComponentProps) 
                       </Button>
                     ))}
                   </div>
-                  <p
-                    className={`text-sm ${
-                      cash !== "" && change < 0
-                        ? "text-destructive"
-                        : "text-muted-foreground"
-                    }`}
-                  >
-                    {cash === ""
-                      ? "Masukkan uang diterima."
-                      : change < 0
-                        ? `Kurang ${formatRupiah(-change)}`
-                        : `Kembalian ${formatRupiah(change)}`}
-                  </p>
+                  {cashDue <= 0 && nonCashSum > 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      Tagihan lunas sepenuhnya dengan non-tunai.
+                    </p>
+                  ) : (
+                    <p
+                      className={`text-sm ${
+                        cash !== "" && change < 0
+                          ? "text-destructive"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      {cash === ""
+                        ? `Butuh tunai ${formatRupiah(cashDue)}.`
+                        : change < 0
+                          ? `Kurang ${formatRupiah(-change)}`
+                          : `Kembalian ${formatRupiah(change)}`}
+                    </p>
+                  )}
                 </div>
 
                 {online ? (
@@ -788,7 +1072,11 @@ export default function Kasir({ actionData, loaderData }: Route.ComponentProps) 
                     className="w-full"
                     disabled={!canSubmit}
                   >
-                    {busy ? "Memproses..." : "Bayar tunai"}
+                    {busy
+                      ? "Memproses..."
+                      : payLines.length > 0
+                        ? "Bayar campuran"
+                        : "Bayar tunai"}
                   </Button>
                 ) : (
                   <Button

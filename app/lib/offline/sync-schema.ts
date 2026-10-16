@@ -43,6 +43,19 @@ export const syncSaleSchema = z
       value: z.number().int().min(0).max(1_000_000_000),
     }),
     cashReceived: z.number().int().min(0).max(2_000_000_000),
+    // Rincian metode non-tunai/pencacah. Bila kosong, server memakai jalur lama
+    // tunai penuh dari cashReceived (kompatibel dengan baris outbox lama).
+    payments: z
+      .array(
+        z.object({
+          method: z.enum(["cash", "qris", "debit", "credit"]),
+          amount: z.number().int().min(0).max(2_000_000_000),
+          tendered: z.number().int().min(0).max(2_000_000_000).optional(),
+          reference: z.string().trim().max(64).optional(),
+        }),
+      )
+      .max(8)
+      .optional(),
   })
   .superRefine((value, ctx) => {
     const seen = new Set<string>();

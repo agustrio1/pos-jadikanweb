@@ -84,6 +84,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     },
     sales: {
       week,
+      today,
       weekRevenue: report.totals.revenue,
       weekCount: report.totals.count,
       todayRevenue: todayRow?.revenue ?? 0,
@@ -96,13 +97,103 @@ const shortDay = new Intl.DateTimeFormat("id-ID", {
   weekday: "short",
   timeZone: "UTC",
 });
-const longDay = new Intl.DateTimeFormat("id-ID", {
-  weekday: "long",
-  day: "numeric",
-  month: "short",
-  timeZone: "UTC",
-});
 const asDate = (day: string) => new Date(`${day}T00:00:00Z`);
+
+// Format Rupiah ringkas untuk label sumbu (mis. 1,5 jt / 12 rb).
+function compactRupiah(n: number): string {
+  if (n >= 1_000_000_000) {
+    return `${(n / 1_000_000_000).toFixed(1).replace(".", ",")} M`;
+  }
+  if (n >= 1_000_000) {
+    return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1).replace(".", ",")} jt`;
+  }
+  if (n >= 1_000) return `${Math.round(n / 1_000)} rb`;
+  return String(Math.round(n));
+}
+
+type WeekPoint = { day: string; revenue: number; count: number };
+
+function SalesChart({
+  week,
+  today,
+}: {
+  week: WeekPoint[];
+  today: string;
+}) {
+  const maxRevenue = Math.max(1, ...week.map((w) => w.revenue));
+  // Empat garis acuan (0%, 25%, 50%, 75%, 100%) untuk sumbu Y.
+  const ticks = [1, 0.75, 0.5, 0.25, 0];
+
+  return (
+    <div className="space-y-3">
+      <div className="flex gap-2">
+        {/* Label sumbu Y */}
+        <div className="flex h-52 w-10 shrink-0 flex-col justify-between text-right text-[10px] tabular-nums text-muted-foreground">
+          {ticks.map((t) => (
+            <span key={t} className="leading-none">
+              {compactRupiah(Math.round(maxRevenue * t))}
+            </span>
+          ))}
+        </div>
+
+        {/* Area batang + garis acuan */}
+        <div className="relative min-w-0 flex-1">
+          <div className="pointer-events-none absolute inset-x-0 top-0 flex h-52 flex-col justify-between">
+            {ticks.map((t) => (
+              <div key={t} className="border-t border-dashed border-border/70" />
+            ))}
+          </div>
+          <div className="relative flex h-52 items-end gap-2 sm:gap-3">
+            {week.map((w) => {
+              const pct = Math.round((w.revenue / maxRevenue) * 100);
+              const isToday = w.day === today;
+              return (
+                <div
+                  key={w.day}
+                  className="group relative flex h-full flex-1 items-end justify-center"
+                >
+                  {/* Tooltip saat kursor di atas batang */}
+                  <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded-md border bg-popover px-2.5 py-1.5 text-center text-xs shadow-md group-hover:block">
+                    <p className="font-medium tabular-nums">
+                      {formatRupiah(w.revenue)}
+                    </p>
+                    <p className="text-muted-foreground">
+                      {w.count} transaksi
+                    </p>
+                  </div>
+                  <div
+                    className={`w-full max-w-12 rounded-t-lg transition-opacity duration-200 group-hover:opacity-90 ${
+                      isToday
+                        ? "bg-emerald-500"
+                        : "bg-primary/70"
+                    }`}
+                    style={{ height: `${Math.max(pct, w.revenue > 0 ? 3 : 0)}%` }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Label hari */}
+      <div className="flex gap-2 pl-12 sm:gap-3">
+        {week.map((w) => (
+          <div
+            key={w.day}
+            className={`flex-1 text-center text-xs ${
+              w.day === today
+                ? "font-semibold text-emerald-600 dark:text-emerald-500"
+                : "text-muted-foreground"
+            }`}
+          >
+            {shortDay.format(asDate(w.day))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 type Tone = "primary" | "destructive" | "muted" | "success";
 
@@ -183,7 +274,6 @@ export default function Home({ loaderData }: Route.ComponentProps) {
     );
   }
 
-  const maxRevenue = Math.max(1, ...sales.week.map((w) => w.revenue));
   const safeCount = Math.max(stats.variants - stats.lowCount, 0);
   const healthPct =
     stats.variants > 0
@@ -244,29 +334,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
             </Button>
           </CardHeader>
           <CardContent>
-            <div className="flex h-48 items-end gap-2 sm:gap-3">
-              {sales.week.map((w) => (
-                <div
-                  key={w.day}
-                  className="flex h-full flex-1 flex-col items-center justify-end gap-2"
-                >
-                  <div className="flex w-full flex-1 items-end">
-                    <div
-                      className="w-full rounded-t-md bg-primary/70 transition-all hover:bg-primary"
-                      style={{
-                        height: `${Math.round((w.revenue / maxRevenue) * 100)}%`,
-                      }}
-                      title={`${longDay.format(asDate(w.day))} · ${formatRupiah(
-                        w.revenue,
-                      )} · ${w.count} transaksi`}
-                    />
-                  </div>
-                  <span className="text-xs text-muted-foreground">
-                    {shortDay.format(asDate(w.day))}
-                  </span>
-                </div>
-              ))}
-            </div>
+            <SalesChart week={sales.week} today={sales.today} />
           </CardContent>
         </Card>
 

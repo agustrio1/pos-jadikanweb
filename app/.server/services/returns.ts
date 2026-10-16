@@ -11,6 +11,7 @@ import {
 } from "../db/schema";
 import { UserError } from "../errors";
 import { formatReceiptNo } from "~/lib/format";
+import { writeAudit } from "./audit";
 
 type Actor = { businessId: string; storeId: string; userId: string };
 
@@ -224,6 +225,16 @@ export async function returnSale(
         clientId: input.clientId ?? null,
       })),
     );
+
+    await writeAudit(tx, {
+      businessId: actor.businessId,
+      storeId: actor.storeId,
+      actorId: actor.userId,
+      action: "return_sale",
+      entityType: "sale",
+      entityId: sale.id,
+      detail: `Retur ${formatReceiptNo(sale.receiptNo)} — ${computed.length} baris, refund Rp${refundTotal}, alasan: ${input.reason}`,
+    });
 
     return { refundTotal, duplicate: false };
   });

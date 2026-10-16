@@ -61,6 +61,13 @@ export async function loader({ request, params }: Route.LoaderArgs) {
 
 const voidSchema = z.object({ reason: z.string().trim().min(3).max(200) });
 
+const METHOD_LABEL: Record<string, string> = {
+  cash: "Tunai",
+  qris: "QRIS",
+  debit: "Debit",
+  credit: "Kredit",
+};
+
 export async function action({ request, params }: Route.ActionArgs) {
   const { user, storeId } = await requireAdminStore(request);
   const id = z.uuid().safeParse(params.id);
@@ -109,7 +116,7 @@ export async function action({ request, params }: Route.ActionArgs) {
 }
 
 export default function Struk({ loaderData, actionData }: Route.ComponentProps) {
-  const { sale, items, payment, voidInfo, returns, isAdmin } = loaderData;
+  const { sale, items, payments, voidInfo, returns, isAdmin } = loaderData;
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
   const error =
@@ -242,6 +249,12 @@ export default function Struk({ loaderData, actionData }: Route.ComponentProps) 
             <span>Kasir</span>
             <span>{sale.cashierName ?? "-"}</span>
           </div>
+          {sale.customerName ? (
+            <div className="flex justify-between">
+              <span>Pelanggan</span>
+              <span>{sale.customerName}</span>
+            </div>
+          ) : null}
           {sale.status === "void" ? (
             <>
               <p className="pt-1 text-center font-bold">** DIBATALKAN **</p>
@@ -284,17 +297,32 @@ export default function Struk({ loaderData, actionData }: Route.ComponentProps) 
             <span>Total</span>
             <span>{formatRupiah(sale.total)}</span>
           </div>
-          {payment ? (
-            <>
-              <div className="flex justify-between">
-                <span>Tunai</span>
-                <span>{formatRupiah(payment.tendered)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Kembali</span>
-                <span>{formatRupiah(payment.changeAmount)}</span>
-              </div>
-            </>
+          {sale.taxAmount > 0 ? (
+            <div className="flex justify-between text-[10px]">
+              <span>PPN 11% (termasuk)</span>
+              <span>{formatRupiah(sale.taxAmount)}</span>
+            </div>
+          ) : null}
+          {payments.map((p) => (
+            <div key={p.id} className="flex justify-between">
+              <span>
+                {METHOD_LABEL[p.method] ?? p.method}
+                {p.reference ? ` (${p.reference})` : ""}
+              </span>
+              <span>
+                {formatRupiah(p.method === "cash" ? p.tendered : p.amount)}
+              </span>
+            </div>
+          ))}
+          {payments.some((p) => p.changeAmount > 0) ? (
+            <div className="flex justify-between">
+              <span>Kembali</span>
+              <span>
+                {formatRupiah(
+                  payments.reduce((sum, p) => sum + p.changeAmount, 0),
+                )}
+              </span>
+            </div>
           ) : null}
         </div>
 

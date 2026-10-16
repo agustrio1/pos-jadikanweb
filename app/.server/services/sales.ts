@@ -2,6 +2,7 @@ import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import {
   businesses,
+  customers,
   inventory,
   payments,
   productVariants,
@@ -16,6 +17,15 @@ import {
 import { UserError } from "../errors";
 import { formatReceiptNo, variantLabel } from "~/lib/format";
 import type { SaleInput } from "~/lib/schemas";
+import {
+  REDEEM_RUPIAH_PER_POINT,
+  normalizeRedeemPoints,
+  pointsEarned,
+  redeemDiscount,
+} from "~/lib/loyalty-rules";
+import { createDebt } from "./debts";
+import { adjustPoints, lockCustomer } from "./loyalty";
+import { computeTaxAmount } from "./tax";
 
 type Actor = { businessId: string; storeId: string; userId: string };
 
@@ -83,6 +93,7 @@ export async function createSale(
         costPrice: productVariants.costPrice,
         sellPrice: productVariants.sellPrice,
         productName: products.name,
+        taxable: products.taxable,
       })
       .from(productVariants)
       .innerJoin(products, eq(products.id, productVariants.productId))
@@ -178,9 +189,53 @@ export async function createSale(
       );
     }
 
-    const total = subtotal - discountAmount;
-    if (input.cashReceived < total) {
-      throw new UserError("Uang diterima kurang dari total.");
+    const totalBeforeLoyalty = subtotal - discountAmount;
+
+    // Loyalti: pelanggan opsional; poin yang ditukar menjadi diskon tambahan.
+    // Nilai uang selalu dihitung ulang & divalidasi server (saldo dikunci).
+    const customerId = input.customerId ?? null;
+    let loyaltyDiscount = 0;
+    if (customerId) {
+      const cust = await lockCustomer(tx, {
+        businessId: actor.businessId,
+        customerId,
+      });
+      const requested = input.redeemPoints ?? 0;
+      if (requested > 0) {
+        // Batasi agar diskon tidak melebihi tagihan dan tetap kelipatan berlaku.
+        const pointsCap = Math.floor(totalBeforeLoyalty / REDEEM_RUPIAH_PER_POINT);
+        const used = Math.min(
+          normalizeRedeemPoints(requested, cust.points),
+          normalizeRedeemPoints(pointsCap, cust.points),
+        );
+        if (used <= 0) {
+          throw new UserError(
+            "Poin tidak mencukupi atau penukaran harus dalam kelipatan yang berlaku.",
+          );
+        }
+        loyaltyDiscount = redeemDiscount(used);
+        await adjustPoints(tx, customerId, -used);
+      }
+    }
+
+    const total = totalBeforeLoyalty - loyaltyDiscount;
+
+    // PPN inklusif: hanya dipecah dari total untuk pelaporan; tidak mengubah
+    // jumlah yang dibayar. Barang non-taxable tidak menyumbang dasar PPN.
+    const taxAmount = computeTaxAmount(
+      lines.map((line) => ({
+        variantId: line.variantId,
+        lineTotal: line.lineTotal,
+        taxable: line.taxable,
+      })),
+      subtotal,
+      discountAmount,
+    );
+
+    // Akumulasi poin dari total akhir (1 poin per Rp1.000 omzet).
+    if (customerId) {
+      const earned = pointsEarned(total);
+      if (earned > 0) await adjustPoints(tx, customerId, earned);
     }
 
     const receiptNo = store.last + 1;
@@ -193,9 +248,11 @@ export async function createSale(
         clientId: input.clientId,
         receiptNo,
         cashierId: actor.userId,
+        customerId,
         subtotal,
         discountAmount,
         total,
+        taxAmount,
       })
       .returning({ id: sales.id });
 
@@ -213,13 +270,86 @@ export async function createSale(
       })),
     );
 
-    await tx.insert(payments).values({
-      saleId: sale.id,
-      method: "cash",
-      amount: total,
-      tendered: input.cashReceived,
-      changeAmount: input.cashReceived - total,
-    });
+    // Susun baris pembayaran. Jika klien mengirim rincian metode (non-tunai/
+    // campuran), jumlahkan dan validasi terhadap total. Jika tidak, pakai jalur
+    // lama tunai penuh dari cashReceived (kompatibel mundur).
+    type PaymentRow = {
+      saleId: string;
+      method: "cash" | "qris" | "debit" | "credit";
+      amount: number;
+      tendered: number;
+      changeAmount: number;
+      reference: string | null;
+    };
+    let paymentRows: PaymentRow[];
+
+    if (input.payments && input.payments.length > 0) {
+      const sum = input.payments.reduce((s, p) => s + p.amount, 0);
+      if (sum !== total) {
+        throw new UserError("Total pembayaran tidak sama dengan tagihan.");
+      }
+      paymentRows = input.payments.map((p) => {
+        if (p.method === "cash") {
+          const tendered = p.tendered ?? p.amount;
+          if (tendered < p.amount) {
+            throw new UserError("Uang tunai kurang dari bagian tunai.");
+          }
+          return {
+            saleId: sale.id,
+            method: "cash",
+            amount: p.amount,
+            tendered,
+            changeAmount: tendered - p.amount,
+            reference: p.reference ?? null,
+          };
+        }
+        return {
+          saleId: sale.id,
+          method: p.method,
+          amount: p.amount,
+          tendered: p.amount,
+          changeAmount: 0,
+          reference: p.reference ?? null,
+        };
+      });
+    } else {
+      if (input.cashReceived < total) {
+        throw new UserError("Uang diterima kurang dari total.");
+      }
+      paymentRows = [
+        {
+          saleId: sale.id,
+          method: "cash",
+          amount: total,
+          tendered: input.cashReceived,
+          changeAmount: input.cashReceived - total,
+          reference: null,
+        },
+      ];
+    }
+
+    await tx.insert(payments).values(paymentRows);
+
+    // Piutang: bagian pembayaran `credit` memerlukan pelanggan dan membentuk
+    // utang terbuka yang bisa dicicil (Fase 6).
+    const creditAmount = input.payments
+      ? input.payments
+          .filter((p) => p.method === "credit")
+          .reduce((s, p) => s + p.amount, 0)
+      : 0;
+    if (creditAmount > 0) {
+      if (!customerId) {
+        throw new UserError("Pembayaran kredit memerlukan pemilihan pelanggan.");
+      }
+      await createDebt(tx, {
+        businessId: actor.businessId,
+        storeId: actor.storeId,
+        customerId,
+        saleId: sale.id,
+        amount: creditAmount,
+        createdBy: actor.userId,
+      });
+    }
 
     for (const line of lines) {
       await tx
@@ -281,16 +411,19 @@ export async function getReceipt(
       subtotal: sales.subtotal,
       discountAmount: sales.discountAmount,
       total: sales.total,
+      taxAmount: sales.taxAmount,
       soldAt: sales.soldAt,
       storeName: stores.name,
       storeAddress: stores.address,
       businessName: businesses.name,
       cashierName: users.name,
+      customerName: customers.name,
     })
     .from(sales)
     .innerJoin(stores, eq(stores.id, sales.storeId))
     .innerJoin(businesses, eq(businesses.id, sales.businessId))
     .leftJoin(users, eq(users.id, sales.cashierId))
+    .leftJoin(customers, eq(customers.id, sales.customerId))
     .where(and(...conditions))
     .limit(1);
 
@@ -311,17 +444,20 @@ export async function getReceipt(
     .where(eq(saleItems.saleId, sale.id))
     .orderBy(asc(saleItems.productName), asc(saleItems.sku));
 
-  const [payment] = await db
+  const paymentRows = await db
     .select({
+      id: payments.id,
       method: payments.method,
+      amount: payments.amount,
       tendered: payments.tendered,
       changeAmount: payments.changeAmount,
+      reference: payments.reference,
     })
     .from(payments)
     .where(eq(payments.saleId, sale.id))
-    .limit(1);
+    .orderBy(asc(payments.createdAt), asc(payments.id));
 
-  return { sale, items, payment: payment ?? null };
+  return { sale, items, payments: paymentRows };
 }
 
 export async function listSales(

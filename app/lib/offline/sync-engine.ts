@@ -195,6 +195,8 @@ function toPayload(row: OutboxSale) {
     })),
     discount: row.discount,
     cashReceived: row.cashReceived,
+    // Hanya ada bila transaksi campuran/non-tunai; undefined dihapus saat JSON.
+    payments: row.payments,
   };
 }
 

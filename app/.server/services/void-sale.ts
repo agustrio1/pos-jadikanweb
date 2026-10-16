@@ -11,6 +11,7 @@ import {
 } from "../db/schema";
 import { UserError } from "../errors";
 import { formatReceiptNo } from "~/lib/format";
+import { writeAudit } from "./audit";
 
 type Actor = { businessId: string; storeId: string; userId: string };
 
@@ -111,6 +112,16 @@ export async function voidSale(
           eq(saleConflicts.status, "open"),
         ),
       );
+
+    await writeAudit(tx, {
+      businessId: actor.businessId,
+      storeId: actor.storeId,
+      actorId: actor.userId,
+      action: "void_sale",
+      entityType: "sale",
+      entityId: sale.id,
+      detail: `Pembatalan penuh ${formatReceiptNo(sale.receiptNo)} — alasan: ${input.reason}`,
+    });
 
     return { alreadyVoid: false };
   });

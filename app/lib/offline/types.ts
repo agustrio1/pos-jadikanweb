@@ -50,6 +50,15 @@ export type OutboxItem = {
   unitPrice: number;
 };
 
+// Satu baris pembayaran untuk penjualan (campuran/non-tunai). Bila tidak ada,
+// server memakai jalur lama tunai penuh dari cashReceived.
+export type SalePaymentLine = {
+  method: "cash" | "qris" | "debit" | "credit";
+  amount: number;
+  tendered?: number;
+  reference?: string;
+};
+
 export type OutboxSale = {
   clientId: string; // kunci idempotensi, dibuat sekali dan tidak berubah
   kind?: OutboxKind; // default "sale" untuk baris lama
@@ -69,6 +78,8 @@ export type OutboxSale = {
   total: number;
   cashReceived: number;
   change: number;
+  // Rincian metode bila transaksi campuran/non-tunai. Baris lama tidak punya.
+  payments?: SalePaymentLine[];
   status: OutboxStatus;
   attempts: number;
   nextRetryAt: number | null;

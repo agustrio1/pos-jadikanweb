@@ -14,6 +14,7 @@ import {
 } from "~/.server/db/schema";
 import { UserError } from "~/.server/errors";
 import { returnSale } from "~/.server/services/returns";
+import { computeTaxAmount } from "~/.server/services/tax";
 import { formatReceiptNo, formatRupiah, variantLabel } from "~/lib/format";
 import type {
   SyncConflictInfo,
@@ -98,6 +99,7 @@ export async function syncSale(
           variantActive: productVariants.isActive,
           productActive: products.isActive,
           productName: products.name,
+          taxable: products.taxable,
         })
         .from(productVariants)
         .innerJoin(products, eq(products.id, productVariants.productId))
@@ -203,6 +205,18 @@ export async function syncSale(
         throw new UserError("Uang diterima kurang dari total.");
       }
 
+      // PPN inklusif (dihitung dari harga perangkat agar konsisten dgn nominal
+      // yang tercatat di outbox); hanya untuk pelaporan, tidak mengubah total.
+      const taxAmount = computeTaxAmount(
+        lines.map((line) => ({
+          variantId: line.variantId,
+          lineTotal: line.lineTotal,
+          taxable: line.taxable,
+        })),
+        subtotal,
+        discountAmount,
+      );
+
       const now = new Date();
       let soldAt = new Date(input.soldAt);
       if (
@@ -238,6 +252,7 @@ export async function syncSale(
           subtotal,
           discountAmount,
           total,
+          taxAmount,
           soldAt,
         })
         .returning({ id: sales.id });
@@ -256,13 +271,48 @@ export async function syncSale(
         })),
       );
 
-      await tx.insert(payments).values({
-        saleId: sale.id,
-        method: "cash",
-        amount: total,
-        tendered: input.cashReceived,
-        changeAmount: input.cashReceived - total,
-      });
+      // Bayar: gunakan rincian metode bila ada (campuran/non-tunai), kalau tidak
+      // tunai penuh dari cashReceived (jalur lama, kompatibel baris outbox lama).
+      type PaymentRow = {
+        saleId: string;
+        method: "cash" | "qris" | "debit" | "credit";
+        amount: number;
+        tendered: number;
+        changeAmount: number;
+        reference: string | null;
+      };
+      let paymentRows: PaymentRow[];
+      if (input.payments && input.payments.length > 0) {
+        const sum = input.payments.reduce((s, p) => s + p.amount, 0);
+        if (sum !== total) {
+          throw new UserError("Total pembayaran tidak sama dengan tagihan.");
+        }
+        paymentRows = input.payments.map((p) => {
+          const isCash = p.method === "cash";
+          const tendered = isCash ? (p.tendered ?? p.amount) : p.amount;
+          return {
+            saleId: sale.id,
+            method: p.method,
+            amount: p.amount,
+            tendered,
+            changeAmount: Math.max(tendered - p.amount, 0),
+            reference: p.reference ?? null,
+          };
+        });
+      } else {
+        paymentRows = [
+          {
+            saleId: sale.id,
+            method: "cash",
+            amount: total,
+            tendered: input.cashReceived,
+            changeAmount: input.cashReceived - total,
+            reference: null,
+          },
+        ];
+      }
+
+      await tx.insert(payments).values(paymentRows);
 
       // Stok boleh menjadi negatif; upsert menangani varian tanpa baris stok.
       for (const line of lines) {

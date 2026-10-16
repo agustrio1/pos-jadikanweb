@@ -9,6 +9,8 @@ import {
 } from "../db/schema";
 import { UserError } from "../errors";
 import type { ProductInput, VariantInput } from "~/lib/schemas";
+import { formatRupiah, variantLabel } from "~/lib/format";
+import { writeAudit } from "./audit";
 
 type Actor = { businessId: string; storeId: string; userId: string };
 
@@ -182,6 +184,24 @@ async function updateVariant(
   variantId: string,
   v: VariantInput,
 ) {
+  // Baca harga & label lama dulu supaya selisih harga bisa dijurnal.
+  const [before] = await tx
+    .select({
+      sellPrice: productVariants.sellPrice,
+      costPrice: productVariants.costPrice,
+      size: productVariants.size,
+      color: productVariants.color,
+    })
+    .from(productVariants)
+    .where(
+      and(
+        eq(productVariants.id, variantId),
+        eq(productVariants.businessId, actor.businessId),
+      ),
+    )
+    .limit(1);
+  if (!before) throw new UserError("Varian tidak ditemukan.");
+
   const [row] = await tx
     .update(productVariants)
     .set({
@@ -217,6 +237,36 @@ async function updateVariant(
       target: [inventory.storeId, inventory.variantId],
       set: { minQty: v.minQty },
     });
+
+  // Catat perubahan harga saja (bukan edit atribut lain) sebagai jejak audit.
+  if (before.sellPrice !== v.sellPrice || before.costPrice !== v.costPrice) {
+    const [prod] = await tx
+      .select({ name: products.name })
+      .from(products)
+      .where(eq(products.id, productId))
+      .limit(1);
+    const label = variantLabel(before.size, before.color);
+    const parts: string[] = [];
+    if (before.sellPrice !== v.sellPrice) {
+      parts.push(
+        `harga jual ${formatRupiah(before.sellPrice)} → ${formatRupiah(v.sellPrice)}`,
+      );
+    }
+    if (before.costPrice !== v.costPrice) {
+      parts.push(
+        `harga beli ${formatRupiah(before.costPrice)} → ${formatRupiah(v.costPrice)}`,
+      );
+    }
+    await writeAudit(tx, {
+      businessId: actor.businessId,
+      storeId: actor.storeId,
+      actorId: actor.userId,
+      action: "price_change",
+      entityType: "variant",
+      entityId: variantId,
+      detail: `Ubah harga ${prod?.name ?? "produk"}${label ? ` (${label})` : ""}: ${parts.join(", ")}`,
+    });
+  }
 }
 
 // Membuat (productId = null) atau memperbarui produk beserta variannya

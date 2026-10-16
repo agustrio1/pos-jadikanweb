@@ -2,6 +2,7 @@ import { Form, Link } from "react-router";
 import type { Route } from "./+types/laporan";
 import { requireAdminStore } from "~/.server/auth/guards";
 import { withDb } from "~/.server/db/client";
+import { outstandingSummary, topDebtors } from "~/.server/services/debts";
 import {
   getInventoryReport,
   getSalesReport,
@@ -44,10 +45,12 @@ export async function loader({ request }: Route.LoaderArgs) {
   );
   const scope = { businessId: user.businessId, storeId };
 
-  const [report, stock] = await withDb((db) =>
+  const [report, stock, debtTotal, debtTop] = await withDb((db) =>
     Promise.all([
       getSalesReport(db, { ...scope, range }),
       getInventoryReport(db, scope),
+      outstandingSummary(db, { businessId: user.businessId }),
+      topDebtors(db, { businessId: user.businessId }),
     ]),
   );
 
@@ -58,6 +61,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     presets: rangePresets(),
     report,
     stock,
+    debt: { total: debtTotal, top: debtTop },
   };
 }
 
@@ -67,7 +71,12 @@ const dayFormat = new Intl.DateTimeFormat("id-ID", {
 });
 const dayLabel = (day: string) => dayFormat.format(new Date(`${day}T00:00:00Z`));
 
-const METHOD_LABEL: Record<string, string> = { cash: "Tunai" };
+const METHOD_LABEL: Record<string, string> = {
+  cash: "Tunai",
+  qris: "QRIS",
+  debit: "Debit",
+  credit: "Kredit",
+};
 
 function Stat({
   label,
@@ -94,7 +103,7 @@ function Stat({
 }
 
 export default function Laporan({ loaderData }: Route.ComponentProps) {
-  const { from, to, note, presets, report, stock } = loaderData;
+  const { from, to, note, presets, report, stock, debt } = loaderData;
   const { totals } = report;
   const average = totals.count > 0 ? Math.floor(totals.revenue / totals.count) : 0;
   const { summary } = stock;
@@ -153,6 +162,11 @@ export default function Laporan({ loaderData }: Route.ComponentProps) {
           <Stat label="Laba kotor" value={formatRupiah(totals.profit)} hint="Omzet dikurangi harga beli saat transaksi." />
           <Stat label="Diskon diberikan" value={formatRupiah(totals.discount)} />
           <Stat
+            label="PPN 11% (termasuk)"
+            value={formatRupiah(totals.tax)}
+            hint="Bagian PPN yang terangkum dalam omzet barang kena pajak."
+          />
+          <Stat
             label="Dibatalkan"
             value={`${totals.voidCount} transaksi`}
             hint={`Senilai ${formatRupiah(totals.voidTotal)}. Tidak masuk omzet.`}
@@ -174,6 +188,7 @@ export default function Laporan({ loaderData }: Route.ComponentProps) {
                   <TableHead className="text-right">Transaksi</TableHead>
                   <TableHead className="text-right">Omzet</TableHead>
                   <TableHead className="text-right">Diskon</TableHead>
+                  <TableHead className="text-right">PPN</TableHead>
                   <TableHead className="text-right">Laba kotor</TableHead>
                   <TableHead className="text-right">Batal</TableHead>
                 </TableRow>
@@ -181,7 +196,7 @@ export default function Laporan({ loaderData }: Route.ComponentProps) {
               <TableBody>
                 {report.days.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="py-10 text-center text-muted-foreground">
+                    <TableCell colSpan={7} className="py-10 text-center text-muted-foreground">
                       Tidak ada transaksi pada rentang ini.
                     </TableCell>
                   </TableRow>
@@ -192,6 +207,7 @@ export default function Laporan({ loaderData }: Route.ComponentProps) {
                       <TableCell className="text-right">{day.count}</TableCell>
                       <TableCell className="text-right">{formatRupiah(day.revenue)}</TableCell>
                       <TableCell className="text-right">{formatRupiah(day.discount)}</TableCell>
+                      <TableCell className="text-right">{formatRupiah(day.tax)}</TableCell>
                       <TableCell className="text-right">{formatRupiah(day.profit)}</TableCell>
                       <TableCell className="text-right">{day.voidCount}</TableCell>
                     </TableRow>
@@ -199,6 +215,59 @@ export default function Laporan({ loaderData }: Route.ComponentProps) {
                 )}
               </TableBody>
             </Table>
+          </CardContent>
+        </Card>
+
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle>Piutang beredar</CardTitle>
+            <CardDescription>
+              Rekap tingkat bisnis (lintas toko): total saldo piutang terbuka
+              dan pelanggan terbesar. Terhitung dari transaksi metode Kredit.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap items-baseline gap-2">
+              <span className="text-2xl font-semibold">
+                {formatRupiah(debt.total.total)}
+              </span>
+              <span className="text-sm text-muted-foreground">
+                dari {debt.total.count} piutang terbuka
+              </span>
+            </div>
+            {debt.top.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Tidak ada piutang beredar.
+              </p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Pelanggan</TableHead>
+                    <TableHead className="text-right">Transaksi</TableHead>
+                    <TableHead className="text-right">Sisa piutang</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {debt.top.map((row) => (
+                    <TableRow key={row.customerId}>
+                      <TableCell>
+                        <Link
+                          to={`/pelanggan?id=${row.customerId}`}
+                          className="hover:underline"
+                        >
+                          {row.customerName}
+                        </Link>
+                      </TableCell>
+                      <TableCell className="text-right">{row.count}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatRupiah(row.balance)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
           </CardContent>
         </Card>
 

@@ -128,6 +128,10 @@ export async function getSalesReport(
             sql<number>`coalesce(sum(${sales.discountAmount}) filter (where ${sales.status} = 'completed'), 0)`.mapWith(
               Number,
             ),
+          tax:
+            sql<number>`coalesce(sum(${sales.taxAmount}) filter (where ${sales.status} = 'completed'), 0)`.mapWith(
+              Number,
+            ),
           voidCount:
             sql<number>`count(*) filter (where ${sales.status} = 'void')`.mapWith(
               Number,
@@ -256,6 +260,7 @@ export async function getSalesReport(
       count: sum.count + day.count,
       revenue: sum.revenue + day.revenue,
       discount: sum.discount + day.discount,
+      tax: sum.tax + day.tax,
       cogs: sum.cogs + day.cogs,
       profit: sum.profit + day.profit,
       voidCount: sum.voidCount + day.voidCount,
@@ -265,6 +270,7 @@ export async function getSalesReport(
       count: 0,
       revenue: 0,
       discount: 0,
+      tax: 0,
       cogs: 0,
       profit: 0,
       voidCount: 0,
