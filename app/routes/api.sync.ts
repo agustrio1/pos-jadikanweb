@@ -2,7 +2,7 @@ import type { Route } from "./+types/api.sync";
 import { assertSameOrigin } from "~/.server/auth/origin";
 import { requireUser } from "~/.server/auth/session";
 import { withDb } from "~/.server/db/client";
-import { syncSale } from "~/.server/services/sync-sales";
+import { syncReturnSale, syncSale } from "~/.server/services/sync-sales";
 import {
   syncBatchSchema,
   type SyncResponse,
@@ -81,19 +81,23 @@ export async function action({ request }: Route.ActionArgs) {
     let unexpected = 0;
     let firstError: unknown = null;
 
-    for (const sale of parsed.data.sales) {
+    for (const item of parsed.data.sales) {
       try {
-        out.push(await syncSale(db, actor, sale));
+        out.push(
+          item.kind === "return"
+            ? await syncReturnSale(db, actor, item)
+            : await syncSale(db, actor, item),
+        );
       } catch (error) {
         // Satu transaksi bermasalah tidak boleh menggagalkan yang lain.
         unexpected += 1;
         firstError ??= error;
         console.error("sync: gagal memproses transaksi", {
-          clientId: sale.clientId,
+          clientId: item.clientId,
           ...describeError(error),
         });
         out.push({
-          clientId: sale.clientId,
+          clientId: item.clientId,
           status: "rejected",
           message:
             "Gagal diproses server (kesalahan tak terduga). Tekan Coba lagi; jika berulang, hubungi admin.",

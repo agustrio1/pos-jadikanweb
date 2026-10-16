@@ -112,6 +112,11 @@ export function OutboxPanel({
               <li key={row.clientId} className="space-y-1 py-2 text-sm">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-medium">
+                    {row.kind === "return" ? (
+                      <Badge variant="outline" className="mr-2">
+                        Retur
+                      </Badge>
+                    ) : null}
                     {row.receiptNo
                       ? `${formatReceiptNo(row.receiptNo)} · ${row.tempNo}`
                       : row.tempNo}
@@ -121,8 +126,13 @@ export function OutboxPanel({
                   </Badge>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {formatDateTime(row.soldAt)} · {formatRupiah(row.total)} ·{" "}
-                  {row.items.reduce((sum, item) => sum + item.qty, 0)} barang
+                  {formatDateTime(row.soldAt)}
+                  {row.kind === "return"
+                    ? ` · ${row.items.reduce((sum, item) => sum + item.qty, 0)} barang diretur`
+                    : ` · ${formatRupiah(row.total)} · ${row.items.reduce(
+                        (sum, item) => sum + item.qty,
+                        0,
+                      )} barang`}
                 </p>
                 {row.lastError && row.status !== "synced" ? (
                   <p className="text-xs text-destructive">{row.lastError}</p>

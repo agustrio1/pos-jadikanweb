@@ -7,6 +7,7 @@ import {
   productVariants,
   products,
   saleItems,
+  saleReturns,
   sales,
   stockMovements,
   stores,
@@ -298,6 +299,7 @@ export async function getReceipt(
   const items = await db
     .select({
       id: saleItems.id,
+      variantId: saleItems.variantId,
       productName: saleItems.productName,
       sku: saleItems.sku,
       variantLabel: saleItems.variantLabel,
@@ -347,6 +349,10 @@ export async function listSales(
       cashierName: users.name,
       itemCount: sql<number>`(select coalesce(sum(${saleItems.qty}), 0) from ${saleItems} where ${saleItems.saleId} = ${sales.id})`.mapWith(
         Number,
+      ),
+      // Ada retur parsial pada transaksi ini? Dipakai untuk badge "Diretur".
+      hasReturns: sql<boolean>`exists (select 1 from ${saleReturns} where ${saleReturns.saleId} = ${sales.id})`.mapWith(
+        Boolean,
       ),
     })
     .from(sales)

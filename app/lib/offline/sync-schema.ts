@@ -22,6 +22,7 @@ export const CONFLICT_LABEL: Record<ConflictKind, string> = {
 // Total dan harga beli sengaja tidak dikirim: server menghitung ulang.
 export const syncSaleSchema = z
   .object({
+    kind: z.literal("sale"),
     clientId: z.uuid(),
      storeId: z.uuid().nullish(),
     tempNo: z.string().trim().min(1).max(40),
@@ -64,11 +65,61 @@ export const syncSaleSchema = z
     }
   });
 
+// Retur offline. Mengacu pada penjualan induk via clientId (penjualan yang
+// juga dibuat offline) atau saleId langsung (sudah pernah tersinkron). Total
+// refund dihitung server, tidak dipercaya dari klien.
+export const syncReturnSchema = z
+  .object({
+    kind: z.literal("return"),
+    clientId: z.uuid(),
+    storeId: z.uuid().nullish(),
+    saleClientId: z.uuid().optional(),
+    saleId: z.uuid().optional(),
+    lines: z
+      .array(
+        z.object({
+          variantId: z.uuid(),
+          qty: z.number().int().min(1).max(10_000),
+        }),
+      )
+      .min(1)
+      .max(100),
+    reason: z.string().trim().min(3).max(200),
+  })
+  .superRefine((value, ctx) => {
+    if (!value.saleClientId && !value.saleId) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Penjualan induk tidak ditentukan",
+        path: ["saleId"],
+      });
+    }
+    const seen = new Set<string>();
+    value.lines.forEach((line, index) => {
+      if (seen.has(line.variantId)) {
+        ctx.addIssue({
+          code: "custom",
+          message: "Produk ganda",
+          path: ["lines", index, "variantId"],
+        });
+      }
+      seen.add(line.variantId);
+    });
+  });
+
+// Satu batch mencampur penjualan dan retur; dibedakan lewat field `kind`.
+export const syncItemSchema = z.discriminatedUnion("kind", [
+  syncSaleSchema,
+  syncReturnSchema,
+]);
+
 export const syncBatchSchema = z.object({
-  sales: z.array(syncSaleSchema).min(1).max(SYNC_BATCH_MAX),
+  sales: z.array(syncItemSchema).min(1).max(SYNC_BATCH_MAX),
 });
 
 export type SyncSaleInput = z.infer<typeof syncSaleSchema>;
+export type SyncReturnInput = z.infer<typeof syncReturnSchema>;
+export type SyncItemInput = z.infer<typeof syncItemSchema>;
 export type SyncConflictInfo = { kind: ConflictKind; detail: string };
 
 export type SyncResultItem =
@@ -79,6 +130,9 @@ export type SyncResultItem =
       receiptNo: number;
       conflicts: SyncConflictInfo[];
     }
+  // Retur yang penjualan induknya belum tiba: bukan kegagalan permanen,
+  // dicoba lagi pada siklus sinkron berikutnya.
+  | { clientId: string; status: "retry_later"; message: string }
   | { clientId: string; status: "rejected"; message: string };
 
 export type SyncResponse = { results: SyncResultItem[] };

@@ -42,6 +42,7 @@ export async function saveOfflineSale(
     const now = Date.now();
     const row: OutboxSale = {
       clientId: input.clientId ?? crypto.randomUUID(),
+      kind: "sale",
       tempNo: `OFF-${code}-${String(seq).padStart(4, "0")}`,
       storeId: input.storeId,
       cashierName: input.cashierName,
@@ -53,6 +54,76 @@ export async function saveOfflineSale(
       total: input.total,
       cashReceived: input.cashReceived,
       change: input.cashReceived - input.total,
+      status: "pending_sync",
+      attempts: 0,
+      nextRetryAt: null,
+      syncingAt: null,
+      lastError: null,
+      permanent: false,
+      saleId: null,
+      receiptNo: null,
+      conflicts: [],
+      createdAt: now,
+      syncedAt: null,
+    };
+    await db.outbox.add(row);
+    return row;
+  });
+}
+
+export type NewOfflineReturn = {
+  clientId?: string;
+  storeId: string | null;
+  cashierName: string;
+  // Induk: penjualan offline (saleClientId) ATAU yang sudah tersinkron (targetSaleId).
+  saleClientId?: string | null;
+  targetSaleId?: string | null;
+  reason: string;
+  items: OutboxItem[];
+};
+
+// Satu retur offline disimpan sebagai baris outbox ber-kind "return" dengan
+// bentuk yang sama seperti penjualan (field penjualan diisi nol) agar panel
+// dan mesin sinkronisasi tidak perlu bercabang. clientId menjadi kunci
+// idempotensi di server.
+export async function saveOfflineReturn(
+  input: NewOfflineReturn,
+): Promise<OutboxSale> {
+  const db = getDb();
+  return db.transaction("rw", db.meta, db.outbox, async () => {
+    if (input.clientId) {
+      const existing = await db.outbox.get(input.clientId);
+      if (existing) return existing;
+    }
+
+    const codeRow = await db.meta.get("deviceCode");
+    let code = codeRow?.value as string | undefined;
+    if (!code) {
+      code = crypto.randomUUID().slice(0, 4).toUpperCase();
+      await db.meta.put({ key: "deviceCode", value: code });
+    }
+    const seqRow = await db.meta.get("offlineSeq");
+    const seq = ((seqRow?.value as number | undefined) ?? 0) + 1;
+    await db.meta.put({ key: "offlineSeq", value: seq });
+
+    const now = Date.now();
+    const row: OutboxSale = {
+      clientId: input.clientId ?? crypto.randomUUID(),
+      kind: "return",
+      saleClientId: input.saleClientId ?? null,
+      targetSaleId: input.targetSaleId ?? null,
+      reason: input.reason,
+      tempNo: `RET-${code}-${String(seq).padStart(4, "0")}`,
+      storeId: input.storeId,
+      cashierName: input.cashierName,
+      soldAt: new Date(now).toISOString(),
+      items: input.items,
+      discount: { type: "none", value: 0 },
+      discountAmount: 0,
+      subtotal: 0,
+      total: 0,
+      cashReceived: 0,
+      change: 0,
       status: "pending_sync",
       attempts: 0,
       nextRetryAt: null,

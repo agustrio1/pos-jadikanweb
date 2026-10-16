@@ -9,6 +9,7 @@ import {
   saleConflicts,
   saleItems,
   sales,
+  users,
 } from "../db/schema";
 
 const DAY_MS = 86_400_000;
@@ -101,6 +102,7 @@ export async function getSalesReport(
   const { businessId, storeId, range } = opts;
 
   const dayExpr = sql<string>`to_char(${sales.soldAt} AT TIME ZONE 'Asia/Jakarta', 'YYYY-MM-DD')`;
+  const hourExpr = sql<string>`to_char(${sales.soldAt} AT TIME ZONE 'Asia/Jakarta', 'HH24')`;
   const inRange = and(
     eq(sales.businessId, businessId),
     eq(sales.storeId, storeId),
@@ -109,7 +111,7 @@ export async function getSalesReport(
   );
   const completed = and(inRange, eq(sales.status, "completed"));
 
-  const [byDay, cogsRows, topProducts, paymentRows, offline, conflicts] =
+  const [byDay, cogsRows, topProducts, paymentRows, offline, conflicts, byHour, byCashier] =
     await Promise.all([
       db
         .select({
@@ -195,6 +197,50 @@ export async function getSalesReport(
             eq(saleConflicts.status, "open"),
           ),
         ),
+
+      // Padatan jam (waktu Jakarta). Hanya transaksi completed yang dihitung.
+      db
+        .select({
+          hour: hourExpr,
+          count:
+            sql<number>`count(*) filter (where ${sales.status} = 'completed')`.mapWith(
+              Number,
+            ),
+          revenue:
+            sql<number>`coalesce(sum(${sales.total}) filter (where ${sales.status} = 'completed'), 0)`.mapWith(
+              Number,
+            ),
+        })
+        .from(sales)
+        .where(inRange)
+        .groupBy(hourExpr),
+
+      // Rekap per kasir. Rata-rata diskon % dihitung di JS dari subtotal.
+      db
+        .select({
+          cashierId: sales.cashierId,
+          cashierName: users.name,
+          count:
+            sql<number>`count(*) filter (where ${sales.status} = 'completed')`.mapWith(
+              Number,
+            ),
+          revenue:
+            sql<number>`coalesce(sum(${sales.total}) filter (where ${sales.status} = 'completed'), 0)`.mapWith(
+              Number,
+            ),
+          discount:
+            sql<number>`coalesce(sum(${sales.discountAmount}) filter (where ${sales.status} = 'completed'), 0)`.mapWith(
+              Number,
+            ),
+          subtotal:
+            sql<number>`coalesce(sum(${sales.subtotal}) filter (where ${sales.status} = 'completed'), 0)`.mapWith(
+              Number,
+            ),
+        })
+        .from(sales)
+        .leftJoin(users, eq(users.id, sales.cashierId))
+        .where(inRange)
+        .groupBy(sales.cashierId, users.name),
     ]);
 
   const cogsByDay = new Map(cogsRows.map((row) => [row.day, row.cogs]));
@@ -226,11 +272,29 @@ export async function getSalesReport(
     },
   );
 
+  const byHourSorted = [...byHour]
+    .filter((row) => row.hour !== null)
+    .sort((a, b) => a.hour.localeCompare(b.hour));
+
+  const byCashierSorted = byCashier
+    .map((row) => ({
+      cashierId: row.cashierId,
+      cashierName: row.cashierName,
+      count: row.count,
+      revenue: row.revenue,
+      discount: row.discount,
+      avgDiscountPct:
+        row.subtotal > 0 ? Math.round((row.discount / row.subtotal) * 100) : 0,
+    }))
+    .sort((a, b) => b.revenue - a.revenue);
+
   return {
     days,
     totals,
     payments: paymentRows,
     topProducts,
+    byHour: byHourSorted,
+    byCashier: byCashierSorted,
     offlineSalesCount: offline[0]?.count ?? 0,
     openConflicts: conflicts[0]?.count ?? 0,
   };

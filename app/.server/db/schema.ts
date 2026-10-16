@@ -20,6 +20,7 @@ export const movementType = pgEnum("movement_type", [
   "adjust",
   "sale",
   "void",
+  "return",
 ]);
 export const saleStatus = pgEnum("sale_status", ["completed", "void"]);
 export const paymentMethod = pgEnum("payment_method", ["cash"]);
@@ -58,7 +59,7 @@ export const users = pgTable(
     storeId: uuid("store_id").references(() => stores.id, {
       onDelete: "set null",
     }),
-    username: text("username").notNull().unique(),
+    username: text("username").notNull(),
     passwordHash: text("password_hash").notNull(),
     name: text("name").notNull(),
     role: userRole("role").notNull().default("kasir"),
@@ -66,7 +67,15 @@ export const users = pgTable(
     isActive: boolean("is_active").notNull().default(true),
     createdAt: createdAt(),
   },
-  (t) => [index("users_business_idx").on(t.businessId)],
+  (t) => [
+    // Username hanya unik di antara akun aktif: akun nonaktif boleh diganti
+    // dengan akun baru berusername sama. Constraint lama (users_username_unique)
+    // dijatuhkan pada migrasi 0004.
+    uniqueIndex("users_username_active_uq")
+      .on(t.username)
+      .where(sql`is_active`),
+    index("users_business_idx").on(t.businessId),
+  ],
 );
 
 export const sessions = pgTable(
@@ -342,5 +351,45 @@ export const saleConflicts = pgTable(
       t.createdAt,
     ),
     index("sale_conflicts_sale_idx").on(t.saleId),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Retur / pembatalan sebagian
+// ---------------------------------------------------------------------------
+
+// Satu baris per (penjualan, varian) yang diretur. Pengembalian uang dihitung
+// proporsional terhadap diskon saat transaksi asal dan disimpan per baris.
+export const saleReturns = pgTable(
+  "sale_returns",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    saleId: uuid("sale_id")
+      .notNull()
+      .references(() => sales.id, { onDelete: "cascade" }),
+    storeId: uuid("store_id")
+      .notNull()
+      .references(() => stores.id),
+    variantId: uuid("variant_id")
+      .notNull()
+      .references(() => productVariants.id),
+    qty: integer("qty").notNull(),
+    refundAmount: integer("refund_amount").notNull(),
+    reason: text("reason").notNull(),
+    createdBy: uuid("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    // Idempotensi retur offline: satu pengiriman ulang dengan clientId yang
+    // sama tidak boleh membuat baris retur ganda. Retur online bernilai null.
+    clientId: uuid("client_id"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("sale_returns_sale_idx").on(t.saleId),
+    index("sale_returns_store_time_idx").on(t.storeId, t.createdAt),
+    check("sale_returns_qty_chk", sql`${t.qty} > 0 AND ${t.refundAmount} >= 0`),
+    uniqueIndex("sale_returns_client_variant_uq")
+      .on(t.clientId, t.variantId)
+      .where(sql`client_id is not null`),
   ],
 );

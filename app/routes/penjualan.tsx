@@ -89,6 +89,11 @@ export default function Penjualan({ loaderData }: Route.ComponentProps) {
                           Batal
                         </Badge>
                       ) : null}
+                      {row.status !== "void" && row.hasReturns ? (
+                        <Badge variant="secondary" className="ml-2">
+                          Diretur
+                        </Badge>
+                      ) : null}
                     </TableCell>
                     <TableCell className="whitespace-nowrap text-muted-foreground">
                       {formatDateTime(row.soldAt)}

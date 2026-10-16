@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { data, Form, redirect, useNavigation } from "react-router";
+import { data, Form, Link, redirect, useNavigation } from "react-router";
 import type { Route } from "./+types/kasir";
 import { requireStoreUser } from "~/.server/auth/store-user";
 import { withDb } from "~/.server/db/client";
@@ -194,7 +194,9 @@ export default function Kasir({ actionData, loaderData }: Route.ComponentProps) 
     for (const row of outboxRows) {
       if (row.status === "synced" || row.status === "conflict") continue;
       for (const item of row.items) {
-        map.set(item.variantId, (map.get(item.variantId) ?? 0) + item.qty);
+        // Retur mengembalikan stok, penjualan mengurangi.
+        const delta = row.kind === "return" ? -item.qty : item.qty;
+        map.set(item.variantId, (map.get(item.variantId) ?? 0) + delta);
       }
     }
     return map;
@@ -411,15 +413,22 @@ export default function Kasir({ actionData, loaderData }: Route.ComponentProps) 
               {ready ? `${items.length} varian tersimpan` : "Memuat katalog..."}
               {syncedAt ? ` · sinkron ${formatDateTime(syncedAt)}` : ""}
             </span>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={!online || syncing}
-              onClick={() => void catalog.sync()}
-            >
-              {syncing ? "Menyinkronkan..." : "Perbarui katalog"}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              {!online && cashier?.role === "admin" ? (
+                <Button variant="outline" size="sm" asChild>
+                  <Link to="/retur">Retur offline</Link>
+                </Button>
+              ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!online || syncing}
+                onClick={() => void catalog.sync()}
+              >
+                {syncing ? "Menyinkronkan..." : "Perbarui katalog"}
+              </Button>
+            </div>
           </div>
 
           {catalog.storageError ? (

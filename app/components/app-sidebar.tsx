@@ -7,7 +7,9 @@ import {
   Logout01Icon,
   PackageIcon,
   ShoppingCart01Icon,
+  StoreAdd01Icon,
   Tag01Icon,
+  UserGroupIcon,
 } from "@hugeicons/core-free-icons";
 import { Link, useFetcher, useLocation } from "react-router";
 import {
@@ -82,6 +84,14 @@ const groups: { label: string; adminOnly?: boolean; items: NavItem[] }[] = [
     items: [
       { to: "/stok", label: "Stok", icon: Layers01Icon, exact: true },
       { to: "/stok/riwayat", label: "Riwayat stok", icon: Clock01Icon },
+    ],
+  },
+  {
+    label: "Administrasi",
+    adminOnly: true,
+    items: [
+      { to: "/pengguna", label: "Pengguna", icon: UserGroupIcon },
+      { to: "/toko", label: "Toko", icon: StoreAdd01Icon },
     ],
   },
 ];

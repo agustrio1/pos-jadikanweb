@@ -37,6 +37,10 @@ export type OutboxStatus =
   | "conflict"
   | "sync_failed";
 
+// Baris outbox bisa berupa penjualan atau retur. Baris lama tanpa field ini
+// dianggap "sale".
+export type OutboxKind = "sale" | "return";
+
 export type OutboxItem = {
   variantId: string;
   name: string;
@@ -48,6 +52,12 @@ export type OutboxItem = {
 
 export type OutboxSale = {
   clientId: string; // kunci idempotensi, dibuat sekali dan tidak berubah
+  kind?: OutboxKind; // default "sale" untuk baris lama
+  // Khusus retur: merujuk penjualan induk. saleClientId untuk induk yang juga
+  // dibuat offline; targetSaleId bila induk sudah pernah tersinkron.
+  saleClientId?: string | null;
+  targetSaleId?: string | null;
+  reason?: string;
   tempNo: string;
   storeId: string | null;
   cashierName: string;

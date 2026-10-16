@@ -80,6 +80,86 @@ export const categorySchema = z.object({
   name: z.string().trim().min(1).max(60),
 });
 
+// Username akun harus cocok pola ini karena login mencari username secara
+// persis (case-sensitive di server); seed men-normalisasi lowercase.
+const USERNAME_PATTERN = /^[a-z0-9._-]{3,32}$/;
+
+export const createUserSchema = z.object({
+  username: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(USERNAME_PATTERN, "3-32 karakter: huruf kecil, angka, titik, garis bawah, atau tanda hubung"),
+  name: z.string().trim().min(1).max(80),
+  role: z.enum(["admin", "kasir"]),
+  storeId: z
+    .union([z.uuid(), z.literal("")])
+    .transform((v) => (v === "" ? null : v)),
+  password: z.string().min(8, "Password minimal 8 karakter").max(200),
+  maxDiscountPct: z.coerce.number().int().min(0).max(100),
+});
+
+export type CreateUserInput = z.infer<typeof createUserSchema>;
+
+export const updateUserSchema = z.object({
+  userId: z.uuid(),
+  name: z.string().trim().min(1).max(80),
+  role: z.enum(["admin", "kasir"]),
+  storeId: z
+    .union([z.uuid(), z.literal("")])
+    .transform((v) => (v === "" ? null : v)),
+  maxDiscountPct: z.coerce.number().int().min(0).max(100),
+});
+
+export type UpdateUserInput = z.infer<typeof updateUserSchema>;
+
+export const setUserActiveSchema = z.object({
+  userId: z.uuid(),
+  active: z.enum(["aktif", "nonaktif"]).transform((v) => v === "aktif"),
+});
+
+export const resetPasswordSchema = z.object({
+  userId: z.uuid(),
+  password: z.string().min(8, "Password minimal 8 karakter").max(200),
+});
+
+export const storeSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  address: emptyToNull(200),
+});
+
+// Payload retur sebagian: daftar baris (varian + jumlah) dan alasan.
+// Jumlah uang dikembalikan dihitung ulang di server, tidak dipercaya dari klien.
+export const returnInputSchema = z
+  .object({
+    saleId: z.uuid(),
+    lines: z
+      .array(
+        z.object({
+          variantId: z.uuid(),
+          qty: z.coerce.number().int().min(1).max(10_000),
+        }),
+      )
+      .min(1)
+      .max(100),
+    reason: z.string().trim().min(3).max(200),
+  })
+  .superRefine((value, ctx) => {
+    const seen = new Set<string>();
+    value.lines.forEach((line, index) => {
+      if (seen.has(line.variantId)) {
+        ctx.addIssue({
+          code: "custom",
+          message: "Produk ganda dalam retur",
+          path: ["lines", index, "variantId"],
+        });
+      }
+      seen.add(line.variantId);
+    });
+  });
+
+export type ReturnInput = z.infer<typeof returnInputSchema>;
+
 export const stockInSchema = z.object({
   variantId: z.uuid(),
   qty: z.coerce.number().int().min(1).max(1_000_000),

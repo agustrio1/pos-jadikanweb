@@ -13,10 +13,12 @@ import {
   stores,
 } from "~/.server/db/schema";
 import { UserError } from "~/.server/errors";
+import { returnSale } from "~/.server/services/returns";
 import { formatReceiptNo, formatRupiah, variantLabel } from "~/lib/format";
 import type {
   SyncConflictInfo,
   SyncResultItem,
+  SyncReturnInput,
   SyncSaleInput,
 } from "~/lib/offline/sync-schema";
 
@@ -332,6 +334,76 @@ export async function syncSale(
         status: "rejected",
         message: err.message,
       };
+    }
+    throw err;
+  }
+}
+
+// Memproses retur yang datang dari antrean offline. Penjualan induk dicari
+// lebih dulu (via clientId penjualan offline, lalu saleId). Jika induk belum
+// tiba, hasil "retry_later" agar klien mengirim ulang tanpa menandai permanen.
+export async function syncReturnSale(
+  db: Db,
+  actor: Actor,
+  input: SyncReturnInput,
+): Promise<SyncResultItem> {
+  // Otorisasi tetap di server: retur hanya boleh dibuat admin, sama seperti
+  // jalur online (requireAdminStore).
+  if (actor.role !== "admin") {
+    return {
+      clientId: input.clientId,
+      status: "rejected",
+      message: "Retur hanya boleh dilakukan admin.",
+    };
+  }
+
+  const lookup = input.saleClientId
+    ? and(
+        eq(sales.storeId, actor.storeId),
+        eq(sales.businessId, actor.businessId),
+        eq(sales.clientId, input.saleClientId),
+      )
+    : input.saleId
+      ? and(
+          eq(sales.id, input.saleId),
+          eq(sales.storeId, actor.storeId),
+          eq(sales.businessId, actor.businessId),
+        )
+      : undefined;
+
+  const [sale] = lookup
+    ? await db
+        .select({ id: sales.id, receiptNo: sales.receiptNo })
+        .from(sales)
+        .where(lookup)
+        .limit(1)
+    : [];
+
+  if (!sale) {
+    return {
+      clientId: input.clientId,
+      status: "retry_later",
+      message: "Penjualan induk belum tersinkron. Retur akan dicoba lagi.",
+    };
+  }
+
+  try {
+    const result = await returnSale(db, actor, {
+      saleId: sale.id,
+      lines: input.lines,
+      reason: input.reason,
+      clientId: input.clientId,
+    });
+    return {
+      clientId: input.clientId,
+      status: result.duplicate ? "duplicate" : "created",
+      saleId: sale.id,
+      receiptNo: sale.receiptNo,
+      conflicts: [],
+    };
+  } catch (err) {
+    if (err instanceof UserError) {
+      return { clientId: input.clientId, status: "rejected", message: err.message };
     }
     throw err;
   }

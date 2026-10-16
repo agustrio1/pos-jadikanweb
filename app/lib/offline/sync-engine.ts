@@ -170,7 +170,19 @@ async function sendIndividually(
 }
 
 function toPayload(row: OutboxSale) {
+  if (row.kind === "return") {
+    return {
+      kind: "return" as const,
+      clientId: row.clientId,
+      storeId: row.storeId,
+      saleClientId: row.saleClientId ?? undefined,
+      saleId: row.targetSaleId ?? undefined,
+      lines: row.items.map(({ variantId, qty }) => ({ variantId, qty })),
+      reason: row.reason ?? "Retur offline",
+    };
+  }
   return {
+    kind: "sale" as const,
     clientId: row.clientId,
     storeId: row.storeId,
     tempNo: row.tempNo,
@@ -260,6 +272,15 @@ async function applyResults(
         await db.outbox.update(
           row.clientId,
           retryPatch(row, "Respons server tidak lengkap."),
+        );
+        continue;
+      }
+
+      if (result.status === "retry_later") {
+        // Penjualan induk belum tiba: kirim lagi nanti, jangan tandai permanen.
+        await db.outbox.update(
+          row.clientId,
+          retryPatch(row, result.message),
         );
         continue;
       }

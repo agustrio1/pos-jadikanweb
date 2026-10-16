@@ -1,0 +1,2 @@
+ALTER TABLE "sale_returns" ADD COLUMN "client_id" uuid;--> statement-breakpoint
+CREATE UNIQUE INDEX "sale_returns_client_variant_uq" ON "sale_returns" USING btree ("client_id","variant_id") WHERE client_id is not null;

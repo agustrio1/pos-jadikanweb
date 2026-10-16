@@ -98,6 +98,10 @@ export default function Laporan({ loaderData }: Route.ComponentProps) {
   const { totals } = report;
   const average = totals.count > 0 ? Math.floor(totals.revenue / totals.count) : 0;
   const { summary } = stock;
+  const maxHourCount = report.byHour.reduce(
+    (max, row) => Math.max(max, row.count),
+    0,
+  );
 
   return (
     <div className="space-y-6">
@@ -137,7 +141,12 @@ export default function Laporan({ loaderData }: Route.ComponentProps) {
       </Card>
 
       <section className="space-y-3">
-        <h2 className="text-lg font-semibold">Penjualan</h2>
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold">Penjualan</h2>
+          <Button variant="outline" size="sm" asChild>
+            <a href={`/laporan/csv?from=${from}&to=${to}`}>Unduh CSV</a>
+          </Button>
+        </div>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           <Stat label="Omzet" value={formatRupiah(totals.revenue)} hint="Total setelah diskon." />
           <Stat label="Transaksi" value={String(totals.count)} hint={`Rata-rata ${formatRupiah(average)} per transaksi.`} />
@@ -192,6 +201,89 @@ export default function Laporan({ loaderData }: Route.ComponentProps) {
             </Table>
           </CardContent>
         </Card>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CardTitle>Padatan jam</CardTitle>
+              <CardDescription>
+                Jumlah transaksi per jam (waktu Jakarta). Menunjukkan jam sibuk
+                toko ini.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-1.5">
+              {report.byHour.length === 0 ? (
+                <p className="py-6 text-center text-sm text-muted-foreground">
+                  Tidak ada transaksi pada rentang ini.
+                </p>
+              ) : (
+                report.byHour.map((row) => (
+                  <div key={row.hour} className="flex items-center gap-2 text-sm">
+                    <span className="w-12 tabular-nums text-muted-foreground">
+                      {row.hour}:00
+                    </span>
+                    <div className="h-4 flex-1 rounded bg-muted">
+                      <div
+                        className="h-full rounded bg-primary/70"
+                        style={{
+                          width: `${maxHourCount > 0 ? Math.round((row.count / maxHourCount) * 100) : 0}%`,
+                        }}
+                      />
+                    </div>
+                    <span className="w-8 text-right tabular-nums">{row.count}</span>
+                    <span className="w-24 text-right tabular-nums text-muted-foreground">
+                      {formatRupiah(row.revenue)}
+                    </span>
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="overflow-hidden">
+            <CardHeader>
+              <CardTitle>Per kasir</CardTitle>
+              <CardDescription>
+                Dipakai sebagai sinyal kontrol, bukan papan peringkat. Rata-rata
+                diskon membantu mengawasi kewenangan.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Kasir</TableHead>
+                    <TableHead className="text-right">Transaksi</TableHead>
+                    <TableHead className="text-right">Omzet</TableHead>
+                    <TableHead className="text-right">Rata-rata diskon</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {report.byCashier.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
+                        Belum ada transaksi.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    report.byCashier.map((row) => (
+                      <TableRow key={row.cashierId ?? "tanpa-kasir"}>
+                        <TableCell className="font-medium">
+                          {row.cashierName ?? "-"}
+                        </TableCell>
+                        <TableCell className="text-right">{row.count}</TableCell>
+                        <TableCell className="text-right">
+                          {formatRupiah(row.revenue)}
+                        </TableCell>
+                        <TableCell className="text-right">{row.avgDiscountPct}%</TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </div>
 
         <div className="grid gap-4 lg:grid-cols-2">
           <Card className="overflow-hidden">
