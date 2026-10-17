@@ -23,6 +23,13 @@ export function meta() {
   return [{ title: "Masuk | POS JadikanWeb" }];
 }
 
+// Akun demo untuk calon klien agar bisa mencoba langsung (diisi lewat
+// `bun run db:seed:demo`). Klik tombol akan mengisi form secara otomatis.
+const DEMO_ACCOUNTS = [
+  { label: "Admin", username: "admin", password: "password" },
+  { label: "Kasir", username: "kasir", password: "kasir12345" },
+];
+
 export async function loader({ request }: Route.LoaderArgs) {
   if (await getUser(request)) throw redirect("/");
   return null;
@@ -83,6 +90,15 @@ export default function Login({ actionData }: Route.ComponentProps) {
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
 
+  // Isi kolom username/password tanpa reload (input uncontrolled pada Form).
+  const fill = (username: string, password: string) => {
+    const u = document.getElementById("username") as HTMLInputElement | null;
+    const p = document.getElementById("password") as HTMLInputElement | null;
+    if (u) u.value = username;
+    if (p) p.value = password;
+    u?.focus();
+  };
+
   return (
     <main className="grid min-h-dvh place-items-center bg-muted/40 p-4">
       <div className="w-full max-w-sm space-y-6">
@@ -134,6 +150,35 @@ export default function Login({ actionData }: Route.ComponentProps) {
                 {busy ? "Memeriksa..." : "Masuk"}
               </Button>
             </Form>
+          </CardContent>
+        </Card>
+
+        <Card className="border-dashed">
+          <CardContent className="pt-6">
+            <p className="text-sm font-medium">Akun demo — coba langsung</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Klik salah satu untuk mengisi otomatis, lalu tekan Masuk.
+            </p>
+            <div className="mt-3 space-y-2">
+              {DEMO_ACCOUNTS.map((a) => (
+                <button
+                  key={a.username}
+                  type="button"
+                  onClick={() => fill(a.username, a.password)}
+                  className="flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left text-sm transition-colors hover:bg-accent"
+                >
+                  <span className="min-w-0">
+                    <span className="font-medium">{a.label}</span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {a.username} / {a.password}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-xs font-medium text-primary">
+                    Isi
+                  </span>
+                </button>
+              ))}
+            </div>
           </CardContent>
         </Card>
       </div>

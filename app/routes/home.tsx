@@ -36,24 +36,30 @@ export function meta() {
 export async function loader({ request }: Route.LoaderArgs) {
   const user = await requireUser(request);
 
-  if (user.role !== "admin" || !user.storeId) {
+  // Butuh toko untuk menampilkan data apa pun.
+  if (!user.storeId) {
     return { stats: null, sales: null };
   }
-
   const storeId = user.storeId;
+  const isAdmin = user.role === "admin";
+
   // Rentang 7 hari terakhir (waktu Jakarta) untuk grafik penjualan.
   const today = jakartaToday();
   const { range } = parseRange(addDays(today, -6), today);
 
-  const [rows, report] = await withDb(async (db) => {
-    const [rows, report] = await Promise.all([
-      listVariants(db, { businessId: user.businessId, storeId }),
-      getSalesReport(db, { businessId: user.businessId, storeId, range }),
-    ]);
-    return [rows, report] as const;
+  const [report, rows] = await withDb(async (db) => {
+    const report = await getSalesReport(db, {
+      businessId: user.businessId,
+      storeId,
+      range,
+    });
+    // Statistik persediaan hanya untuk admin.
+    const rows = isAdmin
+      ? await listVariants(db, { businessId: user.businessId, storeId })
+      : null;
+    return [report, rows] as const;
   });
 
-  const low = rows.filter((row) => row.qty <= row.minQty);
   const byDay = new Map(report.days.map((row) => [row.day, row]));
 
   // Isi 7 hari berturut-turut agar grafik punya sumbu tetap (hari kosong = 0).
@@ -65,8 +71,19 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const todayRow = byDay.get(today);
 
-  return {
-    stats: {
+  const sales = {
+    week,
+    today,
+    weekRevenue: report.totals.revenue,
+    weekCount: report.totals.count,
+    todayRevenue: todayRow?.revenue ?? 0,
+    todayCount: todayRow?.count ?? 0,
+  };
+
+  let stats = null;
+  if (isAdmin && rows) {
+    const low = rows.filter((row) => row.qty <= row.minQty);
+    stats = {
       variants: rows.length,
       capped: rows.length >= 500,
       lowCount: low.length,
@@ -81,16 +98,10 @@ export async function loader({ request }: Route.LoaderArgs) {
         qty: row.qty,
         minQty: row.minQty,
       })),
-    },
-    sales: {
-      week,
-      today,
-      weekRevenue: report.totals.revenue,
-      weekCount: report.totals.count,
-      todayRevenue: todayRow?.revenue ?? 0,
-      todayCount: todayRow?.count ?? 0,
-    },
-  };
+    };
+  }
+
+  return { stats, sales };
 }
 
 const shortDay = new Intl.DateTimeFormat("id-ID", {
@@ -257,7 +268,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
     </Button>
   );
 
-  if (!stats || !sales) {
+  if (!sales) {
     return (
       <>
         <PageHeader
@@ -282,9 +293,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
     );
   }
 
-  const safeCount = Math.max(stats.variants - stats.lowCount, 0);
+  const safeCount = stats ? Math.max(stats.variants - stats.lowCount, 0) : 0;
   const healthPct =
-    stats.variants > 0
+    stats && stats.variants > 0
       ? Math.round((safeCount / stats.variants) * 100)
       : 100;
 
@@ -292,10 +303,15 @@ export default function Home({ loaderData }: Route.ComponentProps) {
     <>
       <PageHeader
         title="Beranda"
-        description="Ringkasan penjualan dan persediaan toko."
+        description={
+          stats
+            ? "Ringkasan penjualan dan persediaan toko."
+            : "Ringkasan penjualan toko."
+        }
         actions={cashierButton}
       />
 
+      {stats ? (
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           icon={Layers01Icon}
@@ -326,9 +342,10 @@ export default function Home({ loaderData }: Route.ComponentProps) {
           tone="primary"
         />
       </div>
+      ) : null}
 
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
+        <Card className={stats ? "lg:col-span-2" : ""}>
           <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
             <div className="space-y-1">
               <CardTitle>Penjualan 7 hari</CardTitle>
@@ -337,15 +354,18 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 {sales.todayCount} transaksi
               </CardDescription>
             </div>
-            <Button variant="outline" size="sm" asChild>
-              <Link to="/laporan">Laporan lengkap</Link>
-            </Button>
+            {stats ? (
+              <Button variant="outline" size="sm" asChild>
+                <Link to="/laporan">Laporan lengkap</Link>
+              </Button>
+            ) : null}
           </CardHeader>
           <CardContent>
             <SalesChart week={sales.week} today={sales.today} />
           </CardContent>
         </Card>
 
+        {stats ? (
         <Card>
           <CardHeader>
             <CardTitle>Kesehatan stok</CardTitle>
@@ -392,8 +412,10 @@ export default function Home({ loaderData }: Route.ComponentProps) {
             </dl>
           </CardContent>
         </Card>
+        ) : null}
       </div>
 
+      {stats ? (
       <Card className="mt-4">
         <CardHeader className="flex flex-row items-center justify-between">
           <div className="space-y-1">
@@ -432,6 +454,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
           )}
         </CardContent>
       </Card>
+      ) : null}
     </>
   );
 }
