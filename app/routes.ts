@@ -11,6 +11,7 @@ export default [
   route("struk/:id", "routes/struk.tsx"),
   route("api/catalog", "routes/api.catalog.ts"),
   route("api/sync", "routes/api.sync.ts"),
+  route("api/barcode", "routes/api.barcode.ts"),
   route("laporan/csv", "routes/laporan-csv.ts"),
   layout("routes/_app.tsx", [
     index("routes/home.tsx"),
@@ -29,6 +30,7 @@ export default [
     route("produk", "routes/produk.tsx"),
     route("produk/baru", "routes/produk-baru.tsx"),
     route("produk/:id", "routes/produk-detail.tsx"),
+    route("label-barcode", "routes/label-barcode.tsx"),
     route("pemasok", "routes/pemasok.tsx"),
     route("pembelian", "routes/pembelian.tsx"),
     route("stok", "routes/stok.tsx"),

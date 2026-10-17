@@ -140,6 +140,8 @@ export function ProductForm({
       ? initial.variants.map((v) => ({ ...v, key: newKey() }))
       : [blankRow()],
   );
+  // Varian yang sedang diambil barcode EAN-13-nya dari server.
+  const [genKey, setGenKey] = useState<string | null>(null);
 
   const visible = hasVariants ? variants : variants.slice(0, 1);
 
@@ -147,6 +149,20 @@ export function ProductForm({
     setVariants((rows) =>
       rows.map((row) => (row.key === key ? { ...row, ...change } : row)),
     );
+
+  // Ambil satu kode EAN-13 baru dari server lalu isi ke kolom barcode varian.
+  const generateBarcode = async (key: string) => {
+    setGenKey(key);
+    try {
+      const res = await fetch("/api/barcode", { method: "POST" });
+      if (res.ok) {
+        const data = (await res.json()) as { code?: string };
+        if (data.code) patch(key, { barcode: data.code });
+      }
+    } finally {
+      setGenKey(null);
+    }
+  };
 
   const payload = JSON.stringify({
     name,
@@ -305,14 +321,31 @@ export function ProductForm({
               <Field
                 id={`${row.key}-barcode`}
                 label="Barcode"
-                hint="Opsional. Bisa diisi dengan scanner."
+                hint="Kosongkan untuk dibuatkan otomatis saat disimpan, atau klik Buat untuk mengisi sekarang. Bisa juga ditempel dari scanner."
               >
-                <Input
-                  id={`${row.key}-barcode`}
-                  maxLength={64}
-                  value={row.barcode}
-                  onChange={(e) => patch(row.key, { barcode: e.target.value })}
-                />
+                <div className="flex gap-2">
+                  <Input
+                    id={`${row.key}-barcode`}
+                    maxLength={64}
+                    inputMode="numeric"
+                    placeholder="EAN-13 otomatis"
+                    value={row.barcode}
+                    onChange={(e) =>
+                      patch(row.key, { barcode: e.target.value })
+                    }
+                    className="flex-1"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0"
+                    disabled={genKey === row.key}
+                    onClick={() => generateBarcode(row.key)}
+                  >
+                    {genKey === row.key ? "Membuat..." : "Buat"}
+                  </Button>
+                </div>
               </Field>
 
               {hasVariants ? (

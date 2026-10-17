@@ -13,6 +13,15 @@ import { Alert, AlertDescription } from "~/components/ui/alert";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "~/components/ui/dropdown-menu";
+import { CameraScanner } from "~/components/camera-scanner";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { BarCode01Icon } from "@hugeicons/core-free-icons";
+import {
   Card,
   CardContent,
   CardDescription,
@@ -202,6 +211,10 @@ export default function Kasir({ actionData, loaderData }: Route.ComponentProps) 
   const [customerId, setCustomerId] = useState("");
   const [redeemInput, setRedeemInput] = useState("");
   const [clientId, setClientId] = useState("");
+  // Umpan balik singkat untuk hasil scan/Enter pada kolom cari.
+  const [scanNotice, setScanNotice] = useState<string | null>(null);
+  // Dialog pemindai kamera.
+  const [cameraOpen, setCameraOpen] = useState(false);
 
   const [savedSale, setSavedSale] = useState<OutboxSale | null>(null);
   const [offlineError, setOfflineError] = useState<string | null>(null);
@@ -390,10 +403,97 @@ export default function Kasir({ actionData, loaderData }: Route.ComponentProps) 
     );
     const target = exact ?? (matched.length === 1 ? matched[0] : undefined);
     if (target) {
+      if (stockOf(target) <= 0) {
+        setScanNotice(`"${search.trim()}" stoknya habis.`);
+        return;
+      }
       add(target.variantId);
       setSearch("");
+      setScanNotice(null);
+    } else {
+      // Scan barcode/SKU yang tidak dikenal -> beri tahu kasir.
+      setScanNotice(`Barcode/SKU "${search.trim()}" tidak ditemukan.`);
     }
   };
+
+  // Hasil dari pemindai kamera: cocokkan persis barcode/SKU lalu tambahkan.
+  const handleCameraCode = (code: string) => {
+    const term = code.trim().toLowerCase();
+    if (!term) return;
+    const hit = items.find(
+      (i) =>
+        (i.barcode ?? "").toLowerCase() === term ||
+        i.sku.toLowerCase() === term,
+    );
+    if (hit) {
+      add(hit.variantId);
+      setScanNotice(null);
+    } else {
+      setScanNotice(`Barcode "${code}" tidak ditemukan di katalog.`);
+    }
+  };
+
+  // Opsi scanner USB / ketik manual: fokuskan ke kolom cari (sudah menangani Enter).
+  const focusScanInput = () => {
+    document.getElementById("kasir-scan-input")?.focus();
+    setScanNotice(
+      "Mode scanner aktif — arahkan scanner atau ketik kode lalu Enter.",
+    );
+  };
+
+  // Ref tangani terbaru agar pendengar keyboard global tidak memakai closure basi.
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const addRef = useRef(add);
+  addRef.current = add;
+
+  // Scanner USB mengetik karakter cepat lalu mengirim Enter. Tangkap di level
+  // jendela supaya scan tetap menambah produk walau fokus bukan di kolom cari
+  // (mis. saat checkout). Saat sedang mengetik di kolom, biarkan kolom itu
+  // yang memproses supaya tidak mengganggu input normal.
+  useEffect(() => {
+    let buffer = "";
+    let lastKeyAt = 0;
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const typing =
+        !!target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable);
+      if (typing) return;
+
+      if (e.key === "Enter") {
+        const code = buffer.trim();
+        buffer = "";
+        if (code.length < 3) return;
+        const term = code.toLowerCase();
+        const hit = itemsRef.current.find(
+          (i) =>
+            (i.barcode ?? "").toLowerCase() === term ||
+            i.sku.toLowerCase() === term,
+        );
+        if (hit) {
+          addRef.current(hit.variantId);
+          setScanNotice(null);
+        } else {
+          setScanNotice(`Barcode/SKU "${code}" tidak ditemukan.`);
+        }
+        return;
+      }
+
+      if (e.key.length === 1) {
+        const now = Date.now();
+        // Jeda antar-tombol panjang -> dianggap ketikan manual, reset buffer.
+        if (now - lastKeyAt > 150) buffer = "";
+        lastKeyAt = now;
+        buffer += e.key;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // reuseClientId diisi saat pembayaran online terputus: transaksi yang sama
   // disimpan ke antrean dengan ID yang sama agar server tidak mencatat ganda.
@@ -498,16 +598,55 @@ export default function Kasir({ actionData, loaderData }: Route.ComponentProps) 
         description="Cari produk atau scan barcode, lalu terima pembayaran tunai."
       />
 
+      <CameraScanner
+        open={cameraOpen}
+        onOpenChange={setCameraOpen}
+        onDetected={handleCameraCode}
+      />
+
       <div className="grid gap-4 lg:grid-cols-[1fr_380px]">
         <div className="space-y-3">
-          <Input
-            autoFocus
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={onSearchKeyDown}
-            placeholder="Cari nama, SKU, atau scan barcode lalu Enter"
-            aria-label="Cari produk"
-          />
+          <div className="flex gap-2">
+            <Input
+              id="kasir-scan-input"
+              autoFocus
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setScanNotice(null);
+              }}
+              onKeyDown={onSearchKeyDown}
+              placeholder="Cari nama, SKU, atau scan barcode lalu Enter"
+              aria-label="Cari produk"
+              className="h-9 flex-1"
+            />
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="h-9 shrink-0">
+                  <HugeiconsIcon
+                    icon={BarCode01Icon}
+                    size={16}
+                    className="mr-2"
+                  />
+                  Scan
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => setCameraOpen(true)}>
+                  Scan dengan kamera
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={focusScanInput}>
+                  Scanner USB / ketik manual
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+
+          {scanNotice ? (
+            <p role="alert" className="text-sm text-destructive">
+              {scanNotice}
+            </p>
+          ) : null}
 
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
             <span>

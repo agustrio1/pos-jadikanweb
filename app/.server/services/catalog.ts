@@ -11,6 +11,7 @@ import { UserError } from "../errors";
 import type { ProductInput, VariantInput } from "~/lib/schemas";
 import { formatRupiah, variantLabel } from "~/lib/format";
 import { writeAudit } from "./audit";
+import { generateBarcode } from "./barcodes";
 
 type Actor = { businessId: string; storeId: string; userId: string };
 
@@ -148,7 +149,8 @@ async function insertVariant(
       businessId: actor.businessId,
       productId,
       sku: v.sku,
-      barcode: v.barcode,
+      // Bila dikosongkan, buatkan EAN-13 otomatis (unik per bisnis).
+      barcode: v.barcode ?? (await generateBarcode(tx, actor.businessId)),
       size: v.size,
       color: v.color,
       costPrice: v.costPrice,
@@ -189,6 +191,7 @@ async function updateVariant(
     .select({
       sellPrice: productVariants.sellPrice,
       costPrice: productVariants.costPrice,
+      barcode: productVariants.barcode,
       size: productVariants.size,
       color: productVariants.color,
     })
@@ -206,7 +209,8 @@ async function updateVariant(
     .update(productVariants)
     .set({
       sku: v.sku,
-      barcode: v.barcode,
+      // Jangan menimpa barcode yang sudah ada; buat otomatis bila belum ada.
+      barcode: v.barcode ?? before.barcode ?? (await generateBarcode(tx, actor.businessId)),
       size: v.size,
       color: v.color,
       costPrice: v.costPrice,

@@ -1,4 +1,5 @@
 import {
+  BarCode01Icon,
   Clock01Icon,
   DeliveryTruck01Icon,
   Home01Icon,
@@ -70,6 +71,12 @@ export const navGroups: NavGroup[] = [
     items: [
       { to: "/produk", label: "Produk", icon: PackageIcon },
       { to: "/kategori", label: "Kategori", icon: Tag01Icon },
+      {
+        to: "/label-barcode",
+        label: "Label Barcode",
+        icon: BarCode01Icon,
+        hint: "Cetak sticker barcode",
+      },
     ],
   },
   {

@@ -731,3 +731,13 @@ export const stockCountItems = pgTable(
     check("stock_count_items_qty_chk", sql`${t.countedQty} >= 0`),
   ],
 );
+
+// Penghitung nomor barcode EAN-13 per bisnis. Satu baris per bisnis; nilainya
+// dinaikkan satu setiap kode otomatis dibuat lewat upsert atomik sehingga
+// penomoran tetap unik meski banyak varian dibuat bersamaan.
+export const barcodeSequences = pgTable("barcode_sequences", {
+  businessId: uuid("business_id")
+    .primaryKey()
+    .references(() => businesses.id, { onDelete: "cascade" }),
+  lastValue: integer("last_value").notNull().default(0),
+});
