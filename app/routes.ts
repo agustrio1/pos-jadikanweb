@@ -12,6 +12,7 @@ export default [
   route("api/catalog", "routes/api.catalog.ts"),
   route("api/sync", "routes/api.sync.ts"),
   route("api/barcode", "routes/api.barcode.ts"),
+  route("api/search", "routes/api.search.ts"),
   route("laporan/csv", "routes/laporan-csv.ts"),
   layout("routes/_app.tsx", [
     index("routes/home.tsx"),

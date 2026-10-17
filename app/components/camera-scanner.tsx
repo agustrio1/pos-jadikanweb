@@ -98,7 +98,7 @@ export function CameraScanner({
             keranjang.
           </Dialog.Description>
 
-          <div className="relative aspect-[4/3] overflow-hidden rounded-lg bg-black">
+          <div className="relative aspect-4/3 overflow-hidden rounded-lg bg-black">
             <video
               ref={videoRef}
               className="h-full w-full object-cover"

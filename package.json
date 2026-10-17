@@ -9,7 +9,8 @@
     "typecheck": "react-router typegen && tsc",
     "db:generate": "bunx --bun drizzle-kit generate",
     "db:migrate": "bun scripts/migrate.ts",
-    "db:seed": "bun scripts/seed.ts"
+    "db:seed": "bun scripts/seed.ts",
+    "db:seed:demo": "bun scripts/seed-demo.ts"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",

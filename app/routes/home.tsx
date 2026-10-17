@@ -111,6 +111,12 @@ function compactRupiah(n: number): string {
   return String(Math.round(n));
 }
 
+// Nilai uang untuk kartu statistik: diringkas bila >= 1 juta agar rapi dan
+// tidak terpotong di tepi kartu (mis. "Rp 6,2 jt" alih-alih "Rp 6.202.000").
+function statMoney(n: number): string {
+  return n >= 1_000_000 ? `Rp ${compactRupiah(n)}` : formatRupiah(n);
+}
+
 type WeekPoint = { day: string; revenue: number; count: number };
 
 function SalesChart({
@@ -227,7 +233,9 @@ function StatCard({
         </span>
         <div className="min-w-0">
           <CardDescription className="truncate">{label}</CardDescription>
-          <CardTitle className="text-2xl">{value}</CardTitle>
+          <CardTitle className="text-xl tracking-tight tabular-nums whitespace-nowrap">
+            {value}
+          </CardTitle>
           {hint ? (
             <p className="truncate text-xs text-muted-foreground">{hint}</p>
           ) : null}
@@ -306,14 +314,14 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         <StatCard
           icon={Tag01Icon}
           label="Nilai persediaan"
-          value={formatRupiah(stats.stockValue)}
+          value={statMoney(stats.stockValue)}
           hint="Menurut harga beli."
           tone="muted"
         />
         <StatCard
           icon={Invoice01Icon}
           label="Omzet 7 hari"
-          value={formatRupiah(sales.weekRevenue)}
+          value={statMoney(sales.weekRevenue)}
           hint={`${sales.weekCount} transaksi.`}
           tone="primary"
         />
